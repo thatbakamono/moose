@@ -2,11 +2,16 @@
 #![no_main]
 
 mod arch;
+mod logger;
 mod serial;
 
 use limine::BaseRevision;
+use log::info;
 
-use crate::serial::{Port, Serial};
+use crate::{
+    logger::init_serial_logger,
+    serial::{Port, Serial},
+};
 
 /// Sets the base revision to the latest revision supported by the crate.
 /// See specification for further info.
@@ -19,7 +24,9 @@ unsafe extern "C" fn _start() -> ! {
 
     Serial::init(Port::COM1).unwrap();
 
-    Serial::writeln(Port::COM1, "Hello, moose!");
+    init_serial_logger().unwrap();
+
+    info!("Hello, moose!");
 
     loop {}
 }

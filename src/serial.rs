@@ -2,6 +2,7 @@ use crate::arch::x86::{inb, outb};
 
 const COM1: u16 = 0x3f8;
 
+#[derive(Clone, Copy)]
 pub enum Port {
     COM1,
 }
@@ -63,5 +64,23 @@ impl Serial {
         }
 
         outb(port, '\n' as u8);
+    }
+}
+
+pub struct SerialWriter {
+    port: Port,
+}
+
+impl SerialWriter {
+    pub fn new(port: Port) -> Self {
+        Self { port }
+    }
+}
+
+impl core::fmt::Write for SerialWriter {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        Serial::write(self.port, s);
+
+        Ok(())
     }
 }
