@@ -1,12 +1,13 @@
-use crate::serial::{Port, Serial};
-use x86_64::structures::idt::{Entry, InterruptDescriptorTable, InterruptStackFrame};
+use log::{error, info, warn};
+use x86_64::structures::idt::{Entry, InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 
 pub static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 
 pub fn init_idt() {
     unsafe {
         IDT.breakpoint.set_handler_fn(breakpoint_handler);
-        IDT.double_fault.set_handler_fn(double_fault);
+        IDT.double_fault.set_handler_fn(double_fault_handler);
+        IDT.page_fault.set_handler_fn(page_fault_handler);
 
         // @TODO: CPU Exception handling?
         for i in 32..=255 {
@@ -20,16 +21,20 @@ pub fn init_idt() {
     }
 }
 
-extern "x86-interrupt" fn double_fault(_isf: InterruptStackFrame, _error_code: u64) -> ! {
-    Serial::writeln(Port::COM1, "Double fault");
+extern "x86-interrupt" fn double_fault_handler(_isf: InterruptStackFrame, _error_code: u64) -> ! {
+    error!("Double fault");
 
     loop {}
 }
 
+extern "x86-interrupt" fn page_fault_handler(_isf: InterruptStackFrame, _error_code: PageFaultErrorCode) {
+    warn!("Page fault");
+}
+
 extern "x86-interrupt" fn breakpoint_handler(_interrupt_stack_frame: InterruptStackFrame) {
-    Serial::writeln(Port::COM1, "Breakpoint handler");
+    info!("Breakpoint handler");
 }
 
 extern "x86-interrupt" fn unknown_interrupt_handler(_interrupt_stack_frame: InterruptStackFrame) {
-    Serial::writeln(Port::COM1, "Unknown interrupt handler");
+    info!("Unknown interrupt handler");
 }

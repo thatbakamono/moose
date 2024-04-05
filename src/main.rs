@@ -39,11 +39,11 @@ unsafe extern "C" fn _start() -> ! {
     PIC.initialize();
     PIT.initialize();
 
-    Serial::writeln(Port::COM1, "Waiting started");
+    info!("Waiting started");
     PIT.wait(10);
-    Serial::writeln(Port::COM1, "Waiting has ended");
+    info!("Waiting has ended");
 
-    Serial::writeln(Port::COM1, "no crash");
+    info!("no crash");
 
     loop {}
 }
