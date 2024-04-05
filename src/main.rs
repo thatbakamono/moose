@@ -10,11 +10,12 @@ mod driver;
 mod logger;
 mod memory;
 mod serial;
+mod vga;
 
 use crate::allocator::init_heap;
 use crate::driver::{pic::PIC, pit::PIT};
 use limine::paging::Mode;
-use limine::request::{HhdmRequest, MemoryMapRequest, PagingModeRequest};
+use limine::request::{FramebufferRequest, HhdmRequest, MemoryMapRequest, PagingModeRequest};
 use limine::BaseRevision;
 use log::{error, info};
 use x86_64::registers::control::{Cr4, Cr4Flags, Efer, EferFlags};
@@ -23,6 +24,7 @@ use crate::{
     logger::init_serial_logger,
     memory::{FrameAllocator, MemoryManager},
     serial::{Port, Serial},
+    vga::Vga,
 };
 
 /// Sets the base revision to the latest revision supported by the crate.
@@ -39,6 +41,9 @@ static MEMORY_MAP_REQUEST: MemoryMapRequest = MemoryMapRequest::new();
 
 #[used]
 static HIGHER_HALF_DIRECT_MAPPING_REQUEST: HhdmRequest = HhdmRequest::new();
+
+#[used]
+static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
 
 #[no_mangle]
 unsafe extern "C" fn _start() -> ! {
@@ -76,6 +81,13 @@ unsafe extern "C" fn _start() -> ! {
     let mut memory_manager = MemoryManager::new(frame_allocator, physical_memory_offset);
 
     init_heap(&mut memory_manager).expect("Failed to initialize heap");
+
+    let vga = {
+        let framebuffer_response = FRAMEBUFFER_REQUEST.get_response().unwrap();
+        let framebuffer = framebuffer_response.framebuffers().next().unwrap();
+
+        Vga::new(framebuffer)
+    };
 
     loop {}
 }
