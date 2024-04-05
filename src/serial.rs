@@ -1,4 +1,4 @@
-use crate::arch::x86::{inb, outb};
+use crate::arch::x86::asm::{inb, outb};
 
 const COM1: u16 = 0x3f8;
 
@@ -9,6 +9,7 @@ pub enum Port {
 
 pub struct Serial;
 
+#[allow(unused)]
 impl Serial {
     pub fn init(port: Port) -> Result<(), ()> {
         let port = match port {
@@ -63,7 +64,7 @@ impl Serial {
             outb(port, byte);
         }
 
-        outb(port, '\n' as u8);
+        outb(port, b'\n');
     }
 }
 

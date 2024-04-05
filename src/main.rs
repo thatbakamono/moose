@@ -1,10 +1,13 @@
+#![feature(abi_x86_interrupt)]
 #![no_std]
 #![no_main]
 
 mod arch;
+mod driver;
 mod logger;
 mod serial;
 
+use crate::driver::{pic::PIC, pit::PIT};
 use limine::BaseRevision;
 use log::{error, info};
 
@@ -27,6 +30,17 @@ unsafe extern "C" fn _start() -> ! {
     init_serial_logger().unwrap();
 
     info!("Hello, moose!");
+
+    Serial::writeln(Port::COM1, "Hello, moose!");
+
+    arch::x86::perform_arch_initialization();
+
+    PIC.initialize();
+    PIT.initialize();
+
+    info!("Waiting started");
+    PIT.wait(1);
+    info!("Waiting has ended");
 
     loop {}
 }
