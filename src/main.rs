@@ -3,12 +3,11 @@
 #![no_main]
 
 mod arch;
-mod logger;
 mod driver;
+mod logger;
 mod serial;
 
-use crate::driver::pic::PIC;
-use crate::driver::pit::PIT;
+use crate::driver::{pic::PIC, pit::PIT};
 use limine::BaseRevision;
 use log::{error, info};
 
@@ -40,10 +39,8 @@ unsafe extern "C" fn _start() -> ! {
     PIT.initialize();
 
     info!("Waiting started");
-    PIT.wait(10);
+    PIT.wait(1);
     info!("Waiting has ended");
-
-    info!("no crash");
 
     loop {}
 }
