@@ -2,6 +2,7 @@ use bitflags::bitflags;
 use core::ops::{Index, IndexMut};
 use limine::memory_map::EntryType;
 use limine::response::MemoryMapResponse;
+use x86_64::instructions::tlb;
 
 pub struct MemoryManager<'a> {
     physical_memory_offset: u64,
@@ -16,11 +17,11 @@ impl<'a> MemoryManager<'a> {
         }
     }
 
-    pub unsafe fn map(&mut self, page: &Page, frame: &Frame) -> Result<(), ()> {
-        self.map_inner(page, frame)
+    pub unsafe fn map(&mut self, page: &Page, frame: &Frame, page_flags: PageFlags) {
+        self.map_inner(page, frame, page_flags)
     }
 
-    fn map_inner(&mut self, page: &Page, frame: &Frame) -> Result<(), ()> {
+    fn map_inner(&mut self, page: &Page, frame: &Frame, page_flags: PageFlags) {
         let address = page.address();
 
         let offset = address.as_u64() & 0b1111_1111_1111;
@@ -40,8 +41,11 @@ impl<'a> MemoryManager<'a> {
             .flags()
             .contains(PageTableFlags::PRESENT)
         {
-            self.allocate_lower_level_page_table(level_4_page_table_entry)?;
+            self.allocate_lower_level_page_table(level_4_page_table_entry)
+                .expect("Failed to allocate L3 page table");
         }
+
+        self.assign_propagable_page_flags_to_page_table_entry(level_4_page_table_entry, page_flags);
 
         let level_3_page_table: *mut PageTable = VirtualAddress(
             level_4_page_table_entry.address().as_u64() + self.physical_memory_offset,
@@ -54,8 +58,11 @@ impl<'a> MemoryManager<'a> {
             .flags()
             .contains(PageTableFlags::PRESENT)
         {
-            self.allocate_lower_level_page_table(level_3_page_table_entry)?;
+            self.allocate_lower_level_page_table(level_3_page_table_entry)
+                .expect("Failed to allocate L2 page table");
         }
+
+        self.assign_propagable_page_flags_to_page_table_entry(level_3_page_table_entry, page_flags);
 
         let level_2_page_table: *mut PageTable = VirtualAddress(
             level_3_page_table_entry.address().as_u64() + self.physical_memory_offset,
@@ -68,8 +75,11 @@ impl<'a> MemoryManager<'a> {
             .flags()
             .contains(PageTableFlags::PRESENT)
         {
-            self.allocate_lower_level_page_table(level_2_page_table_entry)?;
+            self.allocate_lower_level_page_table(level_2_page_table_entry)
+                .expect("Failed to allocate L1 page table");
         }
+
+        self.assign_propagable_page_flags_to_page_table_entry(level_2_page_table_entry, page_flags);
 
         let level_1_page_table: *mut PageTable = VirtualAddress(
             level_2_page_table_entry.address().as_u64() + self.physical_memory_offset,
@@ -79,9 +89,24 @@ impl<'a> MemoryManager<'a> {
             &mut unsafe { &mut *level_1_page_table }[level_1_page_table_entry_index];
 
         level_1_page_table_entry.set_address(frame.address());
-        level_1_page_table_entry.set_flags(PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+        level_1_page_table_entry.set_flags(PageTableFlags::PRESENT);
 
-        Ok(())
+        self.assign_propagable_page_flags_to_page_table_entry(level_1_page_table_entry, page_flags);
+
+        if page_flags.contains(PageFlags::WRITE_THROUGH) {
+            level_1_page_table_entry
+                .set_flags(level_1_page_table_entry.flags() | PageTableFlags::WRITE_THROUGH);
+        }
+
+        if page_flags.contains(PageFlags::DISABLE_CACHING) {
+            level_1_page_table_entry
+                .set_flags(level_1_page_table_entry.flags() | PageTableFlags::NO_CACHE);
+        }
+
+        // TODO: TLB misses are really inefficient, thus flushing the entire TLB is non optimal.
+        //       Optimizing this at the moment doesn't make much sense,
+        //       but it needs to be done in the future.
+        tlb::flush_all();
     }
 
     fn allocate_lower_level_page_table(
@@ -96,9 +121,27 @@ impl<'a> MemoryManager<'a> {
         unsafe { *lower_level_page_table = [PageTableEntry::default(); 512] };
 
         page_table_entry.set_address(frame.address());
-        page_table_entry.set_flags(PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+        page_table_entry.set_flags(PageTableFlags::PRESENT);
 
         Ok(())
+    }
+
+    fn assign_propagable_page_flags_to_page_table_entry(
+        &self,
+        page_table_entry: &mut PageTableEntry,
+        page_flags: PageFlags,
+    ) {
+        if page_flags.contains(PageFlags::WRITABLE) {
+            page_table_entry.set_flags(page_table_entry.flags() | PageTableFlags::WRITABLE);
+        }
+
+        if !page_flags.contains(PageFlags::EXECUTABLE) {
+            page_table_entry.set_flags(page_table_entry.flags() | PageTableFlags::NO_EXECUTE);
+        }
+
+        if page_flags.contains(PageFlags::USER_MODE_ACCESSIBLE) {
+            page_table_entry.set_flags(page_table_entry.flags() | PageTableFlags::USER_ACCESSIBLE);
+        }
     }
 }
 
@@ -195,6 +238,16 @@ impl Default for PageTableEntry {
 }
 
 bitflags! {
+    #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+    pub struct PageFlags : u8 {
+        const WRITABLE = 1 << 1;
+        const EXECUTABLE = 1 << 2;
+        const USER_MODE_ACCESSIBLE = 1 << 3;
+        const WRITE_THROUGH = 1 << 4;
+        const DISABLE_CACHING = 1 << 5;
+        const GLOBAL = 1 << 6;
+    }
+
     #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
     pub struct PageTableFlags: u64 {
         const PRESENT = 1;
