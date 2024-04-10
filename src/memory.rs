@@ -18,7 +18,7 @@ impl<'a> MemoryManager<'a> {
         }
     }
 
-    pub unsafe fn map(&mut self, page: &Page, frame: &Frame, page_flags: PageFlags) {
+    pub unsafe fn map(&mut self, page: &Page, frame: &Frame, page_flags: PageFlags) -> Result<(), MemoryError> {
         self.map_inner(page, frame, page_flags)
     }
 
@@ -26,7 +26,7 @@ impl<'a> MemoryManager<'a> {
         self.unmap_inner(page)
     }
 
-    fn map_inner(&mut self, page: &Page, frame: &Frame, page_flags: PageFlags) {
+    fn map_inner(&mut self, page: &Page, frame: &Frame, page_flags: PageFlags) -> Result<(), MemoryError> {
         let address = page.address();
 
         // | 63 | ... | 49 | 48 | ... | 40 | 39 | ... | 31 | 30 | ... | 22 | 21 | ... | 12 | 11 | ... | 0 |
@@ -104,6 +104,10 @@ impl<'a> MemoryManager<'a> {
         let level_1_page_table_entry =
             &mut unsafe { &mut *level_1_page_table }[level_1_page_table_entry_index];
 
+        if level_1_page_table_entry.flags().contains(PageTableFlags::PRESENT) {
+            return Err(MemoryError::AlreadyMapped);
+        }
+
         level_1_page_table_entry.set_address(frame.address());
         level_1_page_table_entry.set_flags(PageTableFlags::PRESENT);
 
@@ -129,6 +133,8 @@ impl<'a> MemoryManager<'a> {
         //       Optimizing this at the moment doesn't make much sense,
         //       but it needs to be done in the future.
         tlb::flush_all();
+
+        Ok(())
     }
 
     fn unmap_inner(&self, page: &Page) -> Result<(), MemoryError> {
@@ -463,6 +469,8 @@ impl PhysicalAddress {
 
 #[derive(Error, Debug)]
 pub enum MemoryError {
+    #[error("Already mapped")]
+    AlreadyMapped,
     #[error("Non-existent mapping")]
     NonExistentMapping,
 }
