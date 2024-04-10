@@ -13,6 +13,7 @@ use limine::paging::Mode;
 use limine::request::{HhdmRequest, MemoryMapRequest, PagingModeRequest};
 use limine::BaseRevision;
 use log::{error, info};
+use x86_64::registers::control::{Cr4, Cr4Flags, Efer, EferFlags};
 
 use crate::{
     logger::init_serial_logger,
@@ -38,6 +39,9 @@ static HIGHER_HALF_DIRECT_MAPPING_REQUEST: HhdmRequest = HhdmRequest::new();
 #[no_mangle]
 unsafe extern "C" fn _start() -> ! {
     assert!(BASE_REVISION.is_supported());
+
+    Efer::write(Efer::read() | EferFlags::NO_EXECUTE_ENABLE);
+    Cr4::write(Cr4::read() | Cr4Flags::PAGE_GLOBAL);
 
     Serial::init(Port::COM1).unwrap();
 
