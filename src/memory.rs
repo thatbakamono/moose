@@ -287,6 +287,7 @@ pub struct FrameAllocator<'a> {
     n: usize,
 }
 
+// TODO: Implement more advanced frame allocator
 impl<'a> FrameAllocator<'a> {
     pub fn new(memory_map_response: &'a MemoryMapResponse) -> Self {
         Self {
