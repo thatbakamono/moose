@@ -2,6 +2,7 @@ use bitflags::bitflags;
 use core::ops::{Index, IndexMut};
 use limine::memory_map::EntryType;
 use limine::response::MemoryMapResponse;
+use thiserror::Error;
 use x86_64::instructions::tlb;
 
 pub struct MemoryManager<'a> {
@@ -19,6 +20,10 @@ impl<'a> MemoryManager<'a> {
 
     pub unsafe fn map(&mut self, page: &Page, frame: &Frame, page_flags: PageFlags) {
         self.map_inner(page, frame, page_flags)
+    }
+
+    pub unsafe fn unmap(&self, page: &Page) -> Result<(), MemoryError> {
+        self.unmap_inner(page)
     }
 
     fn map_inner(&mut self, page: &Page, frame: &Frame, page_flags: PageFlags) {
@@ -124,6 +129,99 @@ impl<'a> MemoryManager<'a> {
         //       Optimizing this at the moment doesn't make much sense,
         //       but it needs to be done in the future.
         tlb::flush_all();
+    }
+
+    fn unmap_inner(&self, page: &Page) -> Result<(), MemoryError> {
+        let address = page.address();
+
+        // | 63 | ... | 49 | 48 | ... | 40 | 39 | ... | 31 | 30 | ... | 22 | 21 | ... | 12 | 11 | ... | 0 |
+        // | Unused        | Page level 4  | Page level 3  | Page level 2  | Page level 1  | 4 KiB offset |
+        let offset = address.as_u64() & 0b1111_1111_1111;
+        let level_1_page_table_entry_index = ((address.as_u64() >> 12) & 0b1_1111_1111) as usize;
+        let level_2_page_table_entry_index = ((address.as_u64() >> 21) & 0b1_1111_1111) as usize;
+        let level_3_page_table_entry_index = ((address.as_u64() >> 30) & 0b1_1111_1111) as usize;
+        let level_4_page_table_entry_index = ((address.as_u64() >> 39) & 0b1_1111_1111) as usize;
+
+        assert_eq!(offset, 0);
+
+        let level_4_page_table = unsafe { current_page_table(self.physical_memory_offset) };
+        let level_4_page_table_entry =
+            &mut unsafe { &mut *level_4_page_table }[level_4_page_table_entry_index];
+
+        if !level_4_page_table_entry
+            .flags()
+            .contains(PageTableFlags::PRESENT)
+        {
+            return Err(MemoryError::NonExistentMapping);
+        }
+
+        // Addresses in page table entries are all physical,
+        // otherwise they'd need to get translated as well and that would not only be terribly slow
+        // but could also lead to infinite recursion of translations.
+        // As we can't access physical memory directly when we are in long mode,
+        // we need to translate them manually to virtual addresses.
+        // We can do that easily because of the way limine mapped them for us - using higher half direct mapping.
+        // Which means we only need to add/subtract the offset we got from limine to convert addresses
+        // from physical to virtual and vice versa.
+        let level_3_page_table: *mut PageTable = VirtualAddress(
+            level_4_page_table_entry.address().as_u64() + self.physical_memory_offset,
+        )
+        .as_mut_ptr();
+        let level_3_page_table_entry =
+            &mut unsafe { &mut *level_3_page_table }[level_3_page_table_entry_index];
+
+        if !level_3_page_table_entry
+            .flags()
+            .contains(PageTableFlags::PRESENT)
+        {
+            return Err(MemoryError::NonExistentMapping);
+        }
+
+        // Same as `level_3_page_table`
+        let level_2_page_table: *mut PageTable = VirtualAddress(
+            level_3_page_table_entry.address().as_u64() + self.physical_memory_offset,
+        )
+        .as_mut_ptr();
+        let level_2_page_table_entry =
+            &mut unsafe { &mut *level_2_page_table }[level_2_page_table_entry_index];
+
+        if !level_2_page_table_entry
+            .flags()
+            .contains(PageTableFlags::PRESENT)
+        {
+            return Err(MemoryError::NonExistentMapping);
+        }
+
+        // Same as `level_3_page_table`
+        let level_1_page_table: *mut PageTable = VirtualAddress(
+            level_2_page_table_entry.address().as_u64() + self.physical_memory_offset,
+        )
+        .as_mut_ptr();
+        let level_1_page_table_entry =
+            &mut unsafe { &mut *level_1_page_table }[level_1_page_table_entry_index];
+
+        if !level_1_page_table_entry
+            .flags()
+            .contains(PageTableFlags::PRESENT)
+        {
+            return Err(MemoryError::NonExistentMapping);
+        }
+
+        level_1_page_table_entry.set_address(PhysicalAddress::new(0));
+        level_1_page_table_entry.set_flags(PageTableFlags::empty());
+
+        // The TLB (translation lookaside buffer) holds results of previous translations and
+        // allows the CPU to skip a lot of additional work in case it was already computed before and
+        // is present in the cache.
+        // Hence, after each page table modification, we need to flush all relevant TLB entries.
+        // If we didn't, there would be **horrible**, hard to track bugs.
+        //
+        // TODO: TLB misses are really inefficient, thus flushing the entire TLB is non optimal.
+        //       Optimizing this at the moment doesn't make much sense,
+        //       but it needs to be done in the future.
+        tlb::flush_all();
+
+        Ok(())
     }
 
     fn allocate_lower_level_page_table(
@@ -361,6 +459,12 @@ impl PhysicalAddress {
     pub fn as_u64(&self) -> u64 {
         self.0
     }
+}
+
+#[derive(Error, Debug)]
+pub enum MemoryError {
+    #[error("Non-existent mapping")]
+    NonExistentMapping,
 }
 
 pub unsafe fn current_page_table(physical_memory_offset: u64) -> *mut PageTable {
