@@ -304,7 +304,7 @@ impl<'a> FrameAllocator<'a> {
             .filter(|entry| entry.entry_type == EntryType::USABLE)
             .map(|entry| entry.base..(entry.base + entry.length))
             .flat_map(|range| range.step_by(4096))
-            .map(|address| Frame::new(PhysicalAddress(address))) // TODO
+            .map(|address| Frame::new(PhysicalAddress(address)))
             .nth(self.n);
 
         self.n += 1;
