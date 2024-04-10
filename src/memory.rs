@@ -113,6 +113,10 @@ impl<'a> MemoryManager<'a> {
 
         self.assign_propagable_page_flags_to_page_table_entry(level_1_page_table_entry, page_flags);
 
+        if !page_flags.contains(PageFlags::EXECUTABLE) {
+            level_1_page_table_entry.set_flags(level_1_page_table_entry.flags() | PageTableFlags::NO_EXECUTE);
+        }
+
         if page_flags.contains(PageFlags::WRITE_THROUGH) {
             level_1_page_table_entry
                 .set_flags(level_1_page_table_entry.flags() | PageTableFlags::WRITE_THROUGH);
@@ -254,10 +258,6 @@ impl<'a> MemoryManager<'a> {
     ) {
         if page_flags.contains(PageFlags::WRITABLE) {
             page_table_entry.set_flags(page_table_entry.flags() | PageTableFlags::WRITABLE);
-        }
-
-        if !page_flags.contains(PageFlags::EXECUTABLE) {
-            page_table_entry.set_flags(page_table_entry.flags() | PageTableFlags::NO_EXECUTE);
         }
 
         if page_flags.contains(PageFlags::USER_MODE_ACCESSIBLE) {
