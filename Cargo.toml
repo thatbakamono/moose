@@ -12,7 +12,7 @@ x86_64 = "0.15.1"
 spin = "0.9.8"
 pic8259 = "0.11.0"
 bitflags = "2.5.0"
-thiserror = "1.0.58"
+snafu = { version = "0.8.2", default-features = false, features = ["rust_1_61", "rust_1_65", "unstable-core-error"] }
 
 [profile.dev]
 panic = "abort"

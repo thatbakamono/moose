@@ -2,7 +2,7 @@ use bitflags::bitflags;
 use core::ops::{Index, IndexMut};
 use limine::memory_map::EntryType;
 use limine::response::MemoryMapResponse;
-use thiserror::Error;
+use snafu::Snafu;
 use x86_64::instructions::tlb;
 
 pub struct MemoryManager<'a> {
@@ -484,11 +484,11 @@ impl PhysicalAddress {
     }
 }
 
-#[derive(Error, Debug)]
+#[derive(Debug, Snafu)]
 pub enum MemoryError {
-    #[error("Already mapped")]
+    #[snafu(display("Already mapped"))]
     AlreadyMapped,
-    #[error("Non-existent mapping")]
+    #[snafu(display("Non-existent mapping"))]
     NonExistentMapping,
 }
 
