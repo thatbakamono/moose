@@ -7,15 +7,12 @@ const HEAP_SIZE: usize = 128 * 1024;
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
-pub fn init_heap(
-    frame_allocator: &mut FrameAllocator,
-    memory_manager: &mut MemoryManager,
-) -> Result<(), MemoryError> {
+pub fn init_heap(memory_manager: &mut MemoryManager) -> Result<(), MemoryError> {
     for i in 0..(HEAP_SIZE / 4096) {
         let page = Page::new(VirtualAddress::new((HEAP_START + (i * 4096)) as u64));
-        let frame = frame_allocator.allocate().expect("Failed to allocate");
+        let frame = memory_manager.allocate_frame().expect("Failed to allocate");
 
-        unsafe { memory_manager.map(frame_allocator, &page, &frame, PageFlags::WRITABLE)? };
+        unsafe { memory_manager.map(&page, &frame, PageFlags::WRITABLE)? };
     }
 
     unsafe {

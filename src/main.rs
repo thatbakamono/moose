@@ -72,10 +72,10 @@ unsafe extern "C" fn _start() -> ! {
         higher_half_direct_mapping_response.offset()
     };
 
-    let mut frame_allocator = FrameAllocator::new(memory_map_response);
-    let mut memory_manager = MemoryManager::new(physical_memory_offset);
+    let frame_allocator = FrameAllocator::new(memory_map_response);
+    let mut memory_manager = MemoryManager::new(frame_allocator, physical_memory_offset);
 
-    init_heap(&mut frame_allocator, &mut memory_manager).expect("Failed to initialize heap");
+    init_heap(&mut memory_manager).expect("Failed to initialize heap");
 
     loop {}
 }
