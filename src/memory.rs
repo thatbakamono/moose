@@ -5,6 +5,9 @@ use limine::response::MemoryMapResponse;
 use snafu::Snafu;
 use x86_64::instructions::tlb;
 
+pub const PAGE_SIZE: usize = 4096;
+pub const FRAME_SIZE: usize = 4096;
+
 pub struct MemoryManager<'a> {
     frame_allocator: FrameAllocator<'a>,
     physical_memory_offset: u64,
@@ -307,7 +310,7 @@ impl<'a> FrameAllocator<'a> {
             .iter()
             .filter(|entry| entry.entry_type == EntryType::USABLE)
             .map(|entry| entry.base..(entry.base + entry.length))
-            .flat_map(|range| range.step_by(4096))
+            .flat_map(|range| range.step_by(FRAME_SIZE))
             .map(|address| Frame::new(PhysicalAddress(address)))
             .nth(self.n);
 
@@ -412,7 +415,7 @@ pub struct Page {
 
 impl Page {
     pub fn new(address: VirtualAddress) -> Self {
-        assert!(address.is_aligned_to(4096));
+        assert!(address.is_aligned_to(PAGE_SIZE as u64));
 
         Self { address }
     }
@@ -429,7 +432,7 @@ pub struct Frame {
 
 impl Frame {
     pub fn new(address: PhysicalAddress) -> Self {
-        assert!(address.is_aligned_to(4096));
+        assert!(address.is_aligned_to(FRAME_SIZE as u64));
 
         Self { address }
     }
