@@ -2,12 +2,16 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
+mod allocator;
 mod arch;
 mod driver;
 mod logger;
 mod memory;
 mod serial;
 
+use crate::allocator::init_heap;
 use crate::driver::{pic::PIC, pit::PIT};
 use limine::paging::Mode;
 use limine::request::{HhdmRequest, MemoryMapRequest, PagingModeRequest};
@@ -69,7 +73,9 @@ unsafe extern "C" fn _start() -> ! {
     };
 
     let frame_allocator = FrameAllocator::new(memory_map_response);
-    let memory_manager = MemoryManager::new(physical_memory_offset, frame_allocator);
+    let mut memory_manager = MemoryManager::new(frame_allocator, physical_memory_offset);
+
+    init_heap(&mut memory_manager).expect("Failed to initialize heap");
 
     loop {}
 }
