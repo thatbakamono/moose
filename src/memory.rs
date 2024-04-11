@@ -5,26 +5,25 @@ use limine::response::MemoryMapResponse;
 use snafu::Snafu;
 use x86_64::instructions::tlb;
 
-pub struct MemoryManager<'a> {
+pub struct MemoryManager {
     physical_memory_offset: u64,
-    frame_allocator: FrameAllocator<'a>,
 }
 
-impl<'a> MemoryManager<'a> {
-    pub fn new(physical_memory_offset: u64, frame_allocator: FrameAllocator<'a>) -> Self {
+impl MemoryManager {
+    pub fn new(physical_memory_offset: u64) -> Self {
         Self {
             physical_memory_offset,
-            frame_allocator,
         }
     }
 
     pub unsafe fn map(
         &mut self,
+        frame_allocator: &mut FrameAllocator,
         page: &Page,
         frame: &Frame,
         page_flags: PageFlags,
     ) -> Result<(), MemoryError> {
-        self.map_inner(page, frame, page_flags)
+        self.map_inner(frame_allocator, page, frame, page_flags)
     }
 
     pub unsafe fn unmap(&self, page: &Page) -> Result<(), MemoryError> {
@@ -33,6 +32,7 @@ impl<'a> MemoryManager<'a> {
 
     fn map_inner(
         &mut self,
+        frame_allocator: &mut FrameAllocator,
         page: &Page,
         frame: &Frame,
         page_flags: PageFlags,
@@ -57,7 +57,7 @@ impl<'a> MemoryManager<'a> {
             .flags()
             .contains(PageTableFlags::PRESENT)
         {
-            self.allocate_lower_level_page_table(level_4_page_table_entry)
+            self.allocate_lower_level_page_table(frame_allocator, level_4_page_table_entry)
                 .expect("Failed to allocate L3 page table");
         }
 
@@ -82,7 +82,7 @@ impl<'a> MemoryManager<'a> {
             .flags()
             .contains(PageTableFlags::PRESENT)
         {
-            self.allocate_lower_level_page_table(level_3_page_table_entry)
+            self.allocate_lower_level_page_table(frame_allocator, level_3_page_table_entry)
                 .expect("Failed to allocate L2 page table");
         }
 
@@ -100,7 +100,7 @@ impl<'a> MemoryManager<'a> {
             .flags()
             .contains(PageTableFlags::PRESENT)
         {
-            self.allocate_lower_level_page_table(level_2_page_table_entry)
+            self.allocate_lower_level_page_table(frame_allocator, level_2_page_table_entry)
                 .expect("Failed to allocate L1 page table");
         }
 
@@ -251,10 +251,11 @@ impl<'a> MemoryManager<'a> {
     }
 
     fn allocate_lower_level_page_table(
-        &mut self,
+        &self,
+        frame_allocator: &mut FrameAllocator,
         page_table_entry: &mut PageTableEntry,
     ) -> Result<(), ()> {
-        let frame = self.frame_allocator.allocate().ok_or(())?;
+        let frame = frame_allocator.allocate().ok_or(())?;
 
         let lower_level_page_table =
             (frame.address().as_u64() + self.physical_memory_offset) as *mut [PageTableEntry; 512];

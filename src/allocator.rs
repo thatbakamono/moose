@@ -1,0 +1,26 @@
+use crate::memory::{FrameAllocator, MemoryError, MemoryManager, Page, PageFlags, VirtualAddress};
+use linked_list_allocator::LockedHeap;
+
+const HEAP_START: usize = 0x4444_4444_0000;
+const HEAP_SIZE: usize = 128 * 1024;
+
+#[global_allocator]
+static ALLOCATOR: LockedHeap = LockedHeap::empty();
+
+pub fn init_heap(
+    frame_allocator: &mut FrameAllocator,
+    memory_manager: &mut MemoryManager,
+) -> Result<(), MemoryError> {
+    for i in 0..(HEAP_SIZE / 4096) {
+        let page = Page::new(VirtualAddress::new((HEAP_START + (i * 4096)) as u64));
+        let frame = frame_allocator.allocate().expect("Failed to allocate");
+
+        unsafe { memory_manager.map(frame_allocator, &page, &frame, PageFlags::WRITABLE)? };
+    }
+
+    unsafe {
+        ALLOCATOR.lock().init(HEAP_START as *mut u8, HEAP_SIZE);
+    }
+
+    Ok(())
+}
