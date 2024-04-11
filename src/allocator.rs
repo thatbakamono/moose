@@ -1,6 +1,4 @@
-use crate::memory::{
-    FrameAllocator, MemoryError, MemoryManager, Page, PageFlags, VirtualAddress, PAGE_SIZE,
-};
+use crate::memory::{MemoryError, MemoryManager, Page, PageFlags, VirtualAddress, PAGE_SIZE};
 use linked_list_allocator::LockedHeap;
 
 const HEAP_START: usize = 0x4444_4444_0000;
