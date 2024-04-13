@@ -1,6 +1,7 @@
 use core::ptr;
 
 use limine::framebuffer::Framebuffer;
+use crate::font::DEFAULT_ASCII_FONT;
 
 pub struct Vga {
     framebuffer: Framebuffer<'static>,
@@ -108,6 +109,28 @@ impl Vga {
 
     pub fn fill_row(&mut self, x: u64, y: u64, width: u64, color: Rgb) {
         self.fill_rectangle(x, y, width, 1, color);
+    }
+
+    pub fn draw_character(&mut self, x: u64, y: u64, scale: u64, character: char, foreground_color: Rgb, background_color: Rgb) {
+        let framebuffer_width = self.framebuffer.width();
+        let framebuffer_height = self.framebuffer.height();
+
+        assert!((x + 8 * scale) < framebuffer_width);
+        assert!((y + 16 * scale) < framebuffer_height);
+
+        assert!(character.is_ascii_graphic());
+
+        self.fill_rectangle(x, y, 8 * scale, 16 * scale, background_color);
+
+        for current_x in 0..8 * scale {
+            for current_y in 0..16 * scale {
+                let glyph = &DEFAULT_ASCII_FONT[character as usize];
+
+                if (glyph[(current_y / scale) as usize] >> (7 - ((current_x / scale) as usize)) & 1) == 1 {
+                    self.put_pixel(x + current_x, y + current_y, foreground_color);
+                }
+            }
+        }
     }
 }
 

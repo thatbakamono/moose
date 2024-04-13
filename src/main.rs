@@ -7,6 +7,7 @@ extern crate alloc;
 mod allocator;
 mod arch;
 mod driver;
+mod font;
 mod logger;
 mod memory;
 mod serial;
