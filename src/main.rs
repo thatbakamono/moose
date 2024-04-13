@@ -7,11 +7,11 @@ extern crate alloc;
 mod allocator;
 mod arch;
 mod driver;
+mod font;
 mod logger;
 mod memory;
 mod serial;
 mod vga;
-mod font;
 
 use crate::allocator::init_heap;
 use crate::driver::{pic::PIC, pit::PIT};
@@ -27,7 +27,6 @@ use crate::{
     serial::{Port, Serial},
     vga::Vga,
 };
-use crate::vga::Rgb;
 
 /// Sets the base revision to the latest revision supported by the crate.
 /// See specification for further info.
