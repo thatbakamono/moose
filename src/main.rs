@@ -1,4 +1,5 @@
 #![feature(abi_x86_interrupt)]
+#![feature(strict_provenance)]
 #![no_std]
 #![no_main]
 
@@ -6,7 +7,9 @@ extern crate alloc;
 
 mod allocator;
 mod arch;
+mod cpu;
 mod driver;
+mod kernel;
 mod font;
 mod logger;
 mod memory;
@@ -15,18 +18,26 @@ mod vga;
 
 use crate::allocator::init_heap;
 use crate::driver::{pic::PIC, pit::PIT};
+use alloc::rc::Rc;
+use core::cell::RefCell;
+use core::ops::Deref;
 use limine::paging::Mode;
 use limine::request::{FramebufferRequest, HhdmRequest, MemoryMapRequest, PagingModeRequest};
 use limine::BaseRevision;
 use log::{error, info};
-use x86_64::registers::control::{Cr4, Cr4Flags, Efer, EferFlags};
+use raw_cpuid::{cpuid, CpuId};
+use x86_64::registers::control::{Cr3, Cr4, Cr4Flags, Efer, EferFlags};
 
+use crate::driver::acpi::Acpi;
+use crate::driver::apic::{Apic, LocalApic};
+use crate::kernel::Kernel;
 use crate::{
     logger::init_serial_logger,
     memory::{FrameAllocator, MemoryManager},
     serial::{Port, Serial},
     vga::Vga,
 };
+use crate::memory::current_page_table;
 
 /// Sets the base revision to the latest revision supported by the crate.
 /// See specification for further info.
@@ -67,7 +78,7 @@ unsafe extern "C" fn _start() -> ! {
     PIT.initialize();
 
     info!("Waiting started");
-    PIT.wait(1);
+    PIT.wait_seconds(1);
     info!("Waiting has ended");
 
     let memory_map_response = MEMORY_MAP_REQUEST.get_response().unwrap();
@@ -82,6 +93,27 @@ unsafe extern "C" fn _start() -> ! {
     let mut memory_manager = MemoryManager::new(frame_allocator, physical_memory_offset);
 
     init_heap(&mut memory_manager).expect("Failed to initialize heap");
+
+    let memory_manager_ref = Rc::new(RefCell::new(memory_manager));
+
+
+    let acpi = Rc::new(RefCell::new(Acpi::with_memory_manager(Rc::clone(&memory_manager_ref))));
+    let apic = Rc::new(RefCell::new(Apic::initialize(Rc::clone(&memory_manager_ref), Rc::clone(&acpi))));
+
+    let kernel = Rc::new(RefCell::new(Kernel {
+        acpi,
+        apic,
+        memory_manager: memory_manager_ref
+    }));
+
+    let bsp_lapic = LocalApic::initialize_for_current_processor(Rc::clone(&kernel));
+    //cpu::ProcessorControlBlock::create_pcb_for_current_processor(CpuId::new().get_feature_info().unwrap().initial_local_apic_id() as u16);
+
+    //info!("Page tables: {}", Cr3::read().0.start_address().as_u64());
+
+    kernel.borrow().apic.borrow().setup_other_application_processors(Rc::clone(&kernel), &bsp_lapic);
+
+    //info!("LAPIC TIMER SPEED: {}", kernel.borrow().apic.borrow().lapic_timer_ticks_per_second);
 
     let vga = {
         let framebuffer_response = FRAMEBUFFER_REQUEST.get_response().unwrap();

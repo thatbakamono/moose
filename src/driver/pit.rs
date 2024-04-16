@@ -73,7 +73,7 @@ impl ProgrammableIntervalTimer {
         self.initialized = true;
     }
 
-    pub fn wait(&mut self, seconds: u16) {
+    pub fn wait_seconds(&mut self, seconds: u16) {
         if !self.initialized {
             panic!("PIT not initialized!");
         }
@@ -84,6 +84,24 @@ impl ProgrammableIntervalTimer {
 
         // Spinlock :(
         while self.ticks < (seconds * 18) as u32 {
+            unsafe { asm!("hlt") };
+        }
+
+        unsafe { PIC.mask_interrupt(0) };
+    }
+
+    // @TODO: Refactor
+    pub fn wait_sixteen_millis(&mut self) {
+        if !self.initialized {
+            panic!("PIT not initialized!");
+        }
+
+        self.ticks = 0;
+
+        unsafe { PIC.unmask_interrupt(0) };
+
+        // Spinlock :(
+        while self.ticks < 3 {
             unsafe { asm!("hlt") };
         }
 
