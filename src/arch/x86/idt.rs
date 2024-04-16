@@ -327,4 +327,8 @@ extern "x86-interrupt" fn unknown_interrupt_handler(interrupt_stack_frame: Inter
     info!("Unknown interrupt");
 
     info!("Stack frame: {interrupt_stack_frame:?}");
+
+    loop {
+        x86_64::instructions::hlt();
+    }
 }
