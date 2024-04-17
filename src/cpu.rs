@@ -19,7 +19,11 @@ impl ProcessorControlBlock {
             apic_processor_id;
     }
 
-    // This function assumes that PCB has already been created
+    // PCB is created
+    //   - if current processor is BSP, just after memory manager initialization,
+    //   - if current processor is AP, just after jump from assembly code to kernel's initialization
+    //     routine,
+    // so GS will be properly initialized nearly always, and it's safe function.
     pub fn get_pcb_for_current_processor() -> *mut ProcessorControlBlock {
         GS::read_base().as_u64() as *mut ProcessorControlBlock
     }

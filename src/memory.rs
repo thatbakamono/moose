@@ -2,7 +2,6 @@ use bitflags::bitflags;
 use core::ops::{Index, IndexMut};
 use limine::memory_map::EntryType;
 use limine::response::MemoryMapResponse;
-use log::info;
 use snafu::Snafu;
 use x86_64::instructions::tlb;
 

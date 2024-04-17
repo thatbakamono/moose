@@ -9,9 +9,9 @@ use core::cell::RefCell;
 use core::{mem, slice};
 use deku::bitvec::{BitSlice, Msb0};
 use deku::{DekuEnumExt, DekuError, DekuRead};
-use enum_as_inner::EnumAsInner;
 use log::info;
 
+/// Root System Description Pointer Signature
 const RSDP_SIGNATURE: [u8; 8] = *b"RSD PTR ";
 ///  Multiple APIC Description Table (MADT)
 const MADT_SIGNATURE: [u8; 4] = *b"APIC";
@@ -58,7 +58,7 @@ const XSDT_SIGNATURE: [u8; 4] = *b"XSDT";
 
 const BIOS_EXTENDED_AREA_MEMORY_START: u64 = 0x000E0000;
 const BIOS_EXTENDED_AREA_MEMORY_END: u64 = 0x000FFFFF;
-const PAGE_NUMBER: u64 = 0xFFFF_FFFF_F000;
+const PAGE_NUMBER_MASK: u64 = 0xFFFF_FFFF_F000;
 
 #[derive(Debug, Default)]
 #[repr(C, packed)]
@@ -183,7 +183,7 @@ impl<'a> Acpi<'a> {
 
             // Map table into memory
             unsafe {
-                let page_number = pointer_to_entry_header as u64 & PAGE_NUMBER;
+                let page_number = pointer_to_entry_header as u64 & PAGE_NUMBER_MASK;
                 match self.memory_manager.borrow_mut().map(
                     &Page::new(VirtualAddress::new(page_number)),
                     &Frame::new(PhysicalAddress::new(page_number)),
@@ -218,8 +218,7 @@ impl<'a> Acpi<'a> {
                     info!("MADT: {:#?}", madt);
                     self.madt = Rc::new(madt);
                 }
-
-                unknown => {} // }panic!("Unknown ACPI table signature: {:?}", unknown)
+                _ => {}
             }
         }
     }
@@ -233,7 +232,6 @@ impl<'a> Acpi<'a> {
 #[deku(magic = b"APIC")]
 #[repr(C)]
 pub struct MADT {
-    //signature: u32,
     pub length: u32,
     pub revision: u8,
     pub checksum: u8,
@@ -342,7 +340,7 @@ pub struct MadtLocalAPICNonMaskableInterrupts {
 #[repr(C)]
 pub struct MadtLocalAPICAddressOverride {
     pub _reserved: u16,
-    pub address: u64
+    pub address: u64,
 }
 
 #[derive(DekuRead, Debug, Clone)]

@@ -14,18 +14,12 @@ pic8259 = "0.11.0"
 bitflags = "2.5.0"
 snafu = { version = "0.8.2", default-features = false, features = ["rust_1_61", "rust_1_65", "unstable-core-error"] }
 linked_list_allocator = "0.10.5"
-uefi = "0.27.0"
-deku = { version = "0.16.0", features = ["alloc", "const_generics"], default-features = false }
+deku = { version = "0.16.0", default-features = false, features = ["alloc", "const_generics"] }
 raw-cpuid = "11.0.1"
 volatile = "0.5.2"
-enum-as-inner = "0.6.0"
 
 [profile.dev]
 panic = "abort"
 
 [profile.release]
 panic = "abort"
-
-[build-dependencies]
-nasm-rs = "0.3.0"
-pathdiff = "0.2.1"

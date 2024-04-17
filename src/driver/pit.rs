@@ -2,7 +2,6 @@ use crate::arch;
 use crate::arch::x86::asm::outb;
 use crate::driver::pic::{PIC, PIC_1_OFFSET};
 use core::arch::asm;
-use log::info;
 use spin::RwLock;
 use x86_64::instructions::interrupts::without_interrupts;
 use x86_64::structures::idt::InterruptStackFrame;
@@ -88,7 +87,7 @@ impl ProgrammableIntervalTimer {
         // Spinlock :(
         loop {
             if without_interrupts(|| *self.ticks.read() >= (seconds * 18) as u32) {
-                break
+                break;
             }
 
             unsafe { asm!("hlt") };
@@ -110,7 +109,7 @@ impl ProgrammableIntervalTimer {
         // Spinlock :(
         loop {
             if without_interrupts(|| *self.ticks.read() >= 3) {
-                break
+                break;
             }
 
             unsafe { asm!("hlt") };

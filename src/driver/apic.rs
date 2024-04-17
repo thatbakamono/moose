@@ -1,15 +1,14 @@
+use crate::driver::acpi::{Acpi, MADTEntryInner};
 use crate::driver::pit::PIT;
 use crate::kernel::Kernel;
 use crate::memory::{
-    Frame, MemoryError, MemoryManager, Page, PageFlags, PhysicalAddress, VirtualAddress,
+    Frame, MemoryError, Page, PageFlags, PhysicalAddress, VirtualAddress, PAGE_SIZE,
 };
 use alloc::boxed::Box;
 use alloc::rc::Rc;
-use alloc::{format, vec};
-use alloc::vec::Vec;
-use core::arch::{asm, global_asm};
+use alloc::vec;
+use core::arch::asm;
 use core::cell::RefCell;
-use core::ops::Deref;
 use core::ptr;
 use core::ptr::NonNull;
 use log::{debug, info};
@@ -17,13 +16,6 @@ use raw_cpuid::CpuId;
 use spin::RwLock;
 use volatile::VolatilePtr;
 use x86_64::instructions::interrupts::without_interrupts;
-use x86_64::instructions::segmentation::Segment64;
-use x86_64::registers::segmentation::Segment;
-use crate::{cpu, driver};
-use crate::arch::x86::perform_arch_initialization;
-use crate::driver::acpi::{Acpi, MADTEntry, MADTEntryInner, MadtIOAPIC};
-use crate::logger::init_serial_logger;
-use crate::serial::{Port, Serial};
 
 const LOCAL_APIC_LAPIC_ID_REGISTER: u32 = 0x20;
 const LOCAL_APIC_LAPIC_VERSION_REGISTER: u32 = 0x23;
@@ -50,27 +42,29 @@ const APIC_BASE_MSR_BSP_FLAG: u64 = 1 << 8;
 const APIC_BASE_MSR_APIC_GLOBAL_ENABLE_FLAG: u64 = 1 << 11;
 const APIC_BASE_MSR_APIC_BASE_FIELD_MASK: u64 = 0xFFFFFF000;
 
+const STACK_SIZE: usize = 4 * 1024 * 1024;
+
 static TRAMPOLINE_CODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/trampoline"));
 static mut AP_STARTUP_SPINLOCK: RwLock<u8> = RwLock::new(0);
 
 pub unsafe extern "C" fn ap_start(_apic_processor_id: u64) -> ! {
-    Serial::writeln(Port::COM1, "Processor started");
+    info!("[CPU] Processor {} has started", _apic_processor_id);
 
     unsafe { *AP_STARTUP_SPINLOCK.write() = 1 };
 
     // @TODO: PCB initialization with apic_processor_id?
 
-    loop { }
+    loop {}
 }
 
 pub struct Apic<'a> {
     pub lapic_timer_ticks_per_second: u64,
     pub io_apic: Box<IoApic<'a>>,
-    pub acpi: Rc<RefCell<Acpi<'a>>>
+    pub acpi: Rc<RefCell<Acpi<'a>>>,
 }
 
 impl<'a> Apic<'_> {
-    pub fn initialize(memory_manager: Rc<RefCell<MemoryManager<'a>>>, acpi: Rc<RefCell<Acpi<'a>>>) -> Apic<'a> {
+    pub fn initialize(acpi: Rc<RefCell<Acpi<'a>>>) -> Apic<'a> {
         // Check if CPU supports APIC
         let cpuid = CpuId::new();
         assert!(
@@ -78,20 +72,27 @@ impl<'a> Apic<'_> {
             "CPU does not support APIC"
         );
 
-        // @TODO: Refactor
         let io_apic_address = {
             let binding = acpi.borrow();
-
-            let io_apic_entries: Vec<MadtIOAPIC> = binding.madt.entries.iter().filter_map(|entry| {
-                if let MADTEntryInner::IOAPIC(io_apic) = entry.clone().inner { Some(io_apic) } else { None }
-            }).collect();
             // There can be multiple I/O APIC chips in the system, but now we'll only use one.
-            let io_apic_entry = io_apic_entries.first().unwrap();
+            let io_apic_entry = binding
+                .madt
+                .entries
+                .iter()
+                .filter_map(|entry| {
+                    if let MADTEntryInner::IOAPIC(io_apic) = &entry.inner {
+                        Some(io_apic)
+                    } else {
+                        None
+                    }
+                })
+                .next()
+                .unwrap();
 
             io_apic_entry.io_apic_address
         };
 
-        let mut apic = Apic {
+        let apic = Apic {
             lapic_timer_ticks_per_second: 0,
             io_apic: Box::new(unsafe { IoApic::with_address(io_apic_address as u64) }),
             acpi,
@@ -102,63 +103,97 @@ impl<'a> Apic<'_> {
         // setup timer
     }
 
-    pub fn setup_other_application_processors(&self, kernel: Rc<RefCell<Kernel>>, lapic: &LocalApic) {
-        // @FIXME
-        let mut stack = vec![0u8; 1 << 12].as_ptr().addr();
-
+    pub fn setup_other_application_processors(
+        &self,
+        kernel: Rc<RefCell<Kernel>>,
+        lapic: &LocalApic,
+    ) {
         let args = unsafe {
             // Map 0x8000 into memory. This shouldn't be mapped currently.
-            kernel.borrow().memory_manager.borrow_mut().map(
-                &Page::new(VirtualAddress::new(0x8000)),
-                &Frame::new(PhysicalAddress::new(0x8000)),
-                PageFlags::WRITABLE | PageFlags::EXECUTABLE
-            ).unwrap();
+            kernel
+                .borrow()
+                .memory_manager
+                .borrow_mut()
+                .map(
+                    &Page::new(VirtualAddress::new(0x8000)),
+                    &Frame::new(PhysicalAddress::new(0x8000)),
+                    PageFlags::WRITABLE | PageFlags::EXECUTABLE,
+                )
+                .unwrap();
+
+            // Safety check
+            assert!(TRAMPOLINE_CODE.len() <= PAGE_SIZE);
 
             // Copy AP-startup routine to 0x8000
             ptr::copy_nonoverlapping(
                 TRAMPOLINE_CODE.as_ptr(),
-            0x8000 as *mut u8,
-                TRAMPOLINE_CODE.len()
+                0x8000 as *mut u8,
+                TRAMPOLINE_CODE.len(),
             );
 
             let args = (0x8000 as *mut u64).offset(1);
             // PML4 pointer (we'll reuse current processor's pointer)
-            args.write(x86_64::registers::control::Cr3::read().0.start_address().as_u64());
+            args.write(
+                x86_64::registers::control::Cr3::read()
+                    .0
+                    .start_address()
+                    .as_u64(),
+            );
             // Address of kernel's AP initialization routine
             args.offset(1).write(ap_start as u64);
 
             args
         };
 
-        let bsp_id = CpuId::new().get_feature_info().unwrap().initial_local_apic_id() as u16;
+        let bsp_id = CpuId::new()
+            .get_feature_info()
+            .unwrap()
+            .initial_local_apic_id() as u16;
 
-        self.acpi.borrow().madt.entries.iter().filter_map(|entry| {
-            if let MADTEntryInner::ProcessorLocalAPIC(local_apic) = entry.clone().inner { Some(local_apic)} else { None }
-        }).filter(|entry| entry.apic_id != bsp_id as u8).for_each(|entry| {
-            if entry.flags & (1 << 0) == 0 {
-                // Processor is not online-capable, so ignore this entry
-                debug!("Processor {} is not online-capable, skipping...", entry.apic_id);
-                return;
-            }
-
-            unsafe {
-                // Stack
-                // FIXME
-                args.offset(2).write((stack as u64) + 0x50);
-                // APIC ID
-                args.offset(3).write(entry.apic_id as u64);
-
-                *AP_STARTUP_SPINLOCK.write() = 0;
-            }
-
-            self.boot_processor(&lapic, entry.apic_id);
-
-            unsafe {
-                while without_interrupts(|| *AP_STARTUP_SPINLOCK.read() == 0) {
-                    PIT.wait_sixteen_millis()
+        self.acpi
+            .borrow()
+            .madt
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                if let MADTEntryInner::ProcessorLocalAPIC(local_apic) = &entry.inner {
+                    Some(local_apic)
+                } else {
+                    None
                 }
-            }
-        });
+            })
+            .filter(|entry| entry.apic_id != bsp_id as u8)
+            .for_each(|entry| {
+                if entry.flags & (1 << 0) == 0 {
+                    // Processor is not online-capable, so ignore this entry
+                    debug!(
+                        "Processor {} is not online-capable, skipping...",
+                        entry.apic_id
+                    );
+                    return;
+                }
+
+                unsafe {
+                    // Create 4MiB stack
+                    let stack = Box::leak(Box::new([0u8; STACK_SIZE]));
+
+                    // Set stack address in AP's configuration structure
+                    args.offset(2)
+                        .write((stack.as_ptr() as usize + STACK_SIZE - 8) as u64);
+                    // APIC ID
+                    args.offset(3).write(entry.apic_id as u64);
+
+                    *AP_STARTUP_SPINLOCK.write() = 0;
+                }
+
+                self.boot_processor(&lapic, entry.apic_id);
+
+                unsafe {
+                    while without_interrupts(|| *AP_STARTUP_SPINLOCK.read() == 0) {
+                        PIT.wait_sixteen_millis()
+                    }
+                }
+            });
     }
 
     fn boot_processor(&self, bsp_local_apic: &LocalApic, destination_processor_apic_id: u8) {
@@ -167,7 +202,9 @@ impl<'a> Apic<'_> {
         // Set the target processor for INIT IPI
         bsp_local_apic.write_register(
             LOCAL_APIC_INTERRUPT_TARGET_PROCESSOR_REGISTER,
-            (bsp_local_apic.read_register(LOCAL_APIC_INTERRUPT_TARGET_PROCESSOR_REGISTER) & 0x00FFFFFF) | ((destination_processor_apic_id as u32) << 24)
+            (bsp_local_apic.read_register(LOCAL_APIC_INTERRUPT_TARGET_PROCESSOR_REGISTER)
+                & 0x00FFFFFF)
+                | ((destination_processor_apic_id as u32) << 24),
         );
 
         // Set some options and *actually* send an interrupt
@@ -179,16 +216,21 @@ impl<'a> Apic<'_> {
         // Bit 12 - Delivery status (0, it will be set by an APIC)
         bsp_local_apic.write_register(
             LOCAL_APIC_INTERRUPT_OPTIONS_REGISTER,
-            bsp_local_apic.read_register(LOCAL_APIC_INTERRUPT_OPTIONS_REGISTER & 0xFFF00000) | 0x00C500
+            bsp_local_apic.read_register(LOCAL_APIC_INTERRUPT_OPTIONS_REGISTER & 0xFFF00000)
+                | 0x00C500,
         );
 
         // Wait for interrupt delivery
-        while bsp_local_apic.read_register(LOCAL_APIC_INTERRUPT_OPTIONS_REGISTER) & (1 << 12) != 0 { unsafe { asm!("pause") } }
+        while bsp_local_apic.read_register(LOCAL_APIC_INTERRUPT_OPTIONS_REGISTER) & (1 << 12) != 0 {
+            unsafe { asm!("pause") }
+        }
 
         // Set the target processor for INIT IPI
         bsp_local_apic.write_register(
             LOCAL_APIC_INTERRUPT_TARGET_PROCESSOR_REGISTER,
-            (bsp_local_apic.read_register(LOCAL_APIC_INTERRUPT_TARGET_PROCESSOR_REGISTER) & 0x00FFFFFF) | ((destination_processor_apic_id as u32) << 24)
+            (bsp_local_apic.read_register(LOCAL_APIC_INTERRUPT_TARGET_PROCESSOR_REGISTER)
+                & 0x00FFFFFF)
+                | ((destination_processor_apic_id as u32) << 24),
         );
 
         // Set some options and *actually* send an interrupt
@@ -203,11 +245,14 @@ impl<'a> Apic<'_> {
         // This is going to be deassert INIT IPI
         bsp_local_apic.write_register(
             LOCAL_APIC_INTERRUPT_OPTIONS_REGISTER,
-            bsp_local_apic.read_register(LOCAL_APIC_INTERRUPT_OPTIONS_REGISTER & 0xFFF00000) | 0x008500
+            bsp_local_apic.read_register(LOCAL_APIC_INTERRUPT_OPTIONS_REGISTER & 0xFFF00000)
+                | 0x008500,
         );
 
         // Wait for interrupt delivery
-        while bsp_local_apic.read_register(LOCAL_APIC_INTERRUPT_OPTIONS_REGISTER) & (1 << 12) != 0 { unsafe { asm!("pause") } }
+        while bsp_local_apic.read_register(LOCAL_APIC_INTERRUPT_OPTIONS_REGISTER) & (1 << 12) != 0 {
+            unsafe { asm!("pause") }
+        }
 
         // Wait for the processor to execute BIOS code
         //
@@ -221,13 +266,16 @@ impl<'a> Apic<'_> {
             // Set interrupt target
             bsp_local_apic.write_register(
                 LOCAL_APIC_INTERRUPT_TARGET_PROCESSOR_REGISTER,
-                (bsp_local_apic.read_register(LOCAL_APIC_INTERRUPT_TARGET_PROCESSOR_REGISTER) & 0x00FFFFFF) | ((destination_processor_apic_id as u32) << 24)
+                (bsp_local_apic.read_register(LOCAL_APIC_INTERRUPT_TARGET_PROCESSOR_REGISTER)
+                    & 0x00FFFFFF)
+                    | ((destination_processor_apic_id as u32) << 24),
             );
 
             // Trigger startup IPI with memory address 0x8000:0000 (we're in 16-bit mode!)
             bsp_local_apic.write_register(
                 LOCAL_APIC_INTERRUPT_OPTIONS_REGISTER,
-                (bsp_local_apic.read_register(LOCAL_APIC_INTERRUPT_OPTIONS_REGISTER) & 0xFFF0F800) | 0x608
+                (bsp_local_apic.read_register(LOCAL_APIC_INTERRUPT_OPTIONS_REGISTER) & 0xFFF0F800)
+                    | 0x608,
             );
             unsafe { PIT.wait_sixteen_millis() }
         }
@@ -248,7 +296,7 @@ impl IoApic<'_> {
             ),
             io_apic_data_register: VolatilePtr::new(
                 NonNull::new((io_apic_address + 4) as *mut u32).unwrap(),
-            )
+            ),
         }
     }
 
@@ -266,10 +314,10 @@ impl IoApic<'_> {
 
 pub struct LocalApic<'a> {
     local_apic_base: u64,
-    kernel: Rc<RefCell<Kernel<'a>>>
+    kernel: Rc<RefCell<Kernel<'a>>>,
 }
 
-impl<'a> LocalApic<'_> {
+impl LocalApic<'_> {
     pub fn initialize_for_current_processor(kernel: Rc<RefCell<Kernel>>) -> LocalApic {
         let apic_base =
             unsafe { x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR).read() };
@@ -291,7 +339,10 @@ impl<'a> LocalApic<'_> {
             }
         };
 
-        let mut apic = LocalApic { local_apic_base, kernel };
+        let apic = LocalApic {
+            local_apic_base,
+            kernel,
+        };
 
         // Enable Local APIC
         //
@@ -342,7 +393,11 @@ impl<'a> LocalApic<'_> {
             self.local_apic_base, ticks_per_second
         );
 
-        self.kernel.borrow_mut().apic.borrow_mut().lapic_timer_ticks_per_second = ticks_per_second as u64;
+        self.kernel
+            .borrow()
+            .apic
+            .borrow_mut()
+            .lapic_timer_ticks_per_second = ticks_per_second as u64;
     }
 
     fn read_register(&self, register: u32) -> u32 {

@@ -9,8 +9,8 @@ mod allocator;
 mod arch;
 mod cpu;
 mod driver;
-mod kernel;
 mod font;
+mod kernel;
 mod logger;
 mod memory;
 mod serial;
@@ -20,13 +20,11 @@ use crate::allocator::init_heap;
 use crate::driver::{pic::PIC, pit::PIT};
 use alloc::rc::Rc;
 use core::cell::RefCell;
-use core::ops::Deref;
 use limine::paging::Mode;
 use limine::request::{FramebufferRequest, HhdmRequest, MemoryMapRequest, PagingModeRequest};
 use limine::BaseRevision;
 use log::{error, info};
-use raw_cpuid::{cpuid, CpuId};
-use x86_64::registers::control::{Cr3, Cr4, Cr4Flags, Efer, EferFlags};
+use x86_64::registers::control::{Cr4, Cr4Flags, Efer, EferFlags};
 
 use crate::driver::acpi::Acpi;
 use crate::driver::apic::{Apic, LocalApic};
@@ -37,7 +35,6 @@ use crate::{
     serial::{Port, Serial},
     vga::Vga,
 };
-use crate::memory::current_page_table;
 
 /// Sets the base revision to the latest revision supported by the crate.
 /// See specification for further info.
@@ -96,22 +93,30 @@ unsafe extern "C" fn _start() -> ! {
 
     let memory_manager_ref = Rc::new(RefCell::new(memory_manager));
 
-
-    let acpi = Rc::new(RefCell::new(Acpi::with_memory_manager(Rc::clone(&memory_manager_ref))));
-    let apic = Rc::new(RefCell::new(Apic::initialize(Rc::clone(&memory_manager_ref), Rc::clone(&acpi))));
+    let acpi = Rc::new(RefCell::new(Acpi::with_memory_manager(Rc::clone(
+        &memory_manager_ref,
+    ))));
+    let apic = Rc::new(RefCell::new(Apic::initialize(Rc::clone(&acpi))));
 
     let kernel = Rc::new(RefCell::new(Kernel {
         acpi,
         apic,
-        memory_manager: memory_manager_ref
+        memory_manager: memory_manager_ref,
     }));
 
     let bsp_lapic = LocalApic::initialize_for_current_processor(Rc::clone(&kernel));
     //cpu::ProcessorControlBlock::create_pcb_for_current_processor(CpuId::new().get_feature_info().unwrap().initial_local_apic_id() as u16);
 
-    kernel.borrow().apic.borrow().setup_other_application_processors(Rc::clone(&kernel), &bsp_lapic);
+    kernel
+        .borrow()
+        .apic
+        .borrow()
+        .setup_other_application_processors(Rc::clone(&kernel), &bsp_lapic);
 
-    info!("LAPIC TIMER SPEED: {}", kernel.borrow().apic.borrow().lapic_timer_ticks_per_second);
+    info!(
+        "LAPIC TIMER SPEED: {}",
+        kernel.borrow().apic.borrow().lapic_timer_ticks_per_second
+    );
 
     let vga = {
         let framebuffer_response = FRAMEBUFFER_REQUEST.get_response().unwrap();
