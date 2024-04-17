@@ -14,7 +14,9 @@ use core::ptr;
 use core::ptr::NonNull;
 use log::{debug, info};
 use raw_cpuid::CpuId;
+use spin::RwLock;
 use volatile::VolatilePtr;
+use x86_64::instructions::interrupts::without_interrupts;
 use x86_64::instructions::segmentation::Segment64;
 use x86_64::registers::segmentation::Segment;
 use crate::{cpu, driver};
@@ -49,13 +51,12 @@ const APIC_BASE_MSR_APIC_GLOBAL_ENABLE_FLAG: u64 = 1 << 11;
 const APIC_BASE_MSR_APIC_BASE_FIELD_MASK: u64 = 0xFFFFFF000;
 
 static TRAMPOLINE_CODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/trampoline"));
-static mut AP_STARTUP_SPINLOCK: u8 = 0;
+static mut AP_STARTUP_SPINLOCK: RwLock<u8> = RwLock::new(0);
 
-pub unsafe extern "C" fn ap_start(apic_processor_id: u64) -> ! {
-
-    unsafe { AP_STARTUP_SPINLOCK = 1 }
-
+pub unsafe extern "C" fn ap_start(_apic_processor_id: u64) -> ! {
     Serial::writeln(Port::COM1, "Processor started");
+
+    unsafe { *AP_STARTUP_SPINLOCK.write() = 1 };
 
     // @TODO: PCB initialization with apic_processor_id?
 
@@ -113,7 +114,6 @@ impl<'a> Apic<'_> {
                 PageFlags::WRITABLE | PageFlags::EXECUTABLE
             ).unwrap();
 
-
             // Copy AP-startup routine to 0x8000
             ptr::copy_nonoverlapping(
                 TRAMPOLINE_CODE.as_ptr(),
@@ -143,23 +143,22 @@ impl<'a> Apic<'_> {
 
             unsafe {
                 // Stack
-                args.offset(2).write(stack as u64);
+                // FIXME
+                args.offset(2).write((stack as u64) + 0x50);
                 // APIC ID
                 args.offset(3).write(entry.apic_id as u64);
 
-                AP_STARTUP_SPINLOCK = 0;
+                *AP_STARTUP_SPINLOCK.write() = 0;
             }
 
             self.boot_processor(&lapic, entry.apic_id);
 
             unsafe {
-                while AP_STARTUP_SPINLOCK == 0 {
+                while without_interrupts(|| *AP_STARTUP_SPINLOCK.read() == 0) {
                     PIT.wait_sixteen_millis()
                 }
             }
         });
-
-        loop { unsafe { PIT.wait_seconds(1);} }
     }
 
     fn boot_processor(&self, bsp_local_apic: &LocalApic, destination_processor_apic_id: u8) {

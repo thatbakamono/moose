@@ -2,6 +2,9 @@ use crate::arch;
 use crate::arch::x86::asm::outb;
 use crate::driver::pic::{PIC, PIC_1_OFFSET};
 use core::arch::asm;
+use log::info;
+use spin::RwLock;
+use x86_64::instructions::interrupts::without_interrupts;
 use x86_64::structures::idt::InterruptStackFrame;
 
 // CPU Timer
@@ -18,14 +21,14 @@ const PIT_TIMER: u8 = PIC_1_OFFSET;
 pub static mut PIT: ProgrammableIntervalTimer = ProgrammableIntervalTimer::new();
 
 pub struct ProgrammableIntervalTimer {
-    ticks: u32,
+    ticks: RwLock<u32>,
     initialized: bool,
 }
 
 impl ProgrammableIntervalTimer {
     pub const fn new() -> Self {
         ProgrammableIntervalTimer {
-            ticks: 0,
+            ticks: RwLock::new(0),
             initialized: false,
         }
     }
@@ -78,12 +81,16 @@ impl ProgrammableIntervalTimer {
             panic!("PIT not initialized!");
         }
 
-        self.ticks = 0;
+        *self.ticks.write() = 0;
 
         unsafe { PIC.unmask_interrupt(0) };
 
         // Spinlock :(
-        while self.ticks < (seconds * 18) as u32 {
+        loop {
+            if without_interrupts(|| *self.ticks.read() >= (seconds * 18) as u32) {
+                break
+            }
+
             unsafe { asm!("hlt") };
         }
 
@@ -96,12 +103,16 @@ impl ProgrammableIntervalTimer {
             panic!("PIT not initialized!");
         }
 
-        self.ticks = 0;
+        *self.ticks.write() = 0;
 
         unsafe { PIC.unmask_interrupt(0) };
 
         // Spinlock :(
-        while self.ticks < 3 {
+        loop {
+            if without_interrupts(|| *self.ticks.read() >= 3) {
+                break
+            }
+
             unsafe { asm!("hlt") };
         }
 
@@ -109,7 +120,7 @@ impl ProgrammableIntervalTimer {
     }
 
     fn interrupt_handler(&mut self) {
-        self.ticks += 1;
+        *self.ticks.write() += 1;
     }
 }
 

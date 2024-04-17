@@ -109,11 +109,9 @@ unsafe extern "C" fn _start() -> ! {
     let bsp_lapic = LocalApic::initialize_for_current_processor(Rc::clone(&kernel));
     //cpu::ProcessorControlBlock::create_pcb_for_current_processor(CpuId::new().get_feature_info().unwrap().initial_local_apic_id() as u16);
 
-    //info!("Page tables: {}", Cr3::read().0.start_address().as_u64());
-
     kernel.borrow().apic.borrow().setup_other_application_processors(Rc::clone(&kernel), &bsp_lapic);
 
-    //info!("LAPIC TIMER SPEED: {}", kernel.borrow().apic.borrow().lapic_timer_ticks_per_second);
+    info!("LAPIC TIMER SPEED: {}", kernel.borrow().apic.borrow().lapic_timer_ticks_per_second);
 
     let vga = {
         let framebuffer_response = FRAMEBUFFER_REQUEST.get_response().unwrap();
