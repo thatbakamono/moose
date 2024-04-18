@@ -1,10 +1,15 @@
+use crate::cpu;
 use log::{LevelFilter, SetLoggerError};
 
 use crate::serial::{Port, SerialWriter};
 
-static LOGGER: SerialLogger = SerialLogger;
+pub static mut LOGGER: SerialLogger = SerialLogger {
+    pcb_initialized: false,
+};
 
-struct SerialLogger;
+struct SerialLogger {
+    pub pcb_initialized: bool,
+}
 
 impl log::Log for SerialLogger {
     fn enabled(&self, _metadata: &log::Metadata) -> bool {
@@ -16,8 +21,21 @@ impl log::Log for SerialLogger {
 
         if self.enabled(record.metadata()) {
             let mut writer = SerialWriter::new(Port::COM1);
+            let cpu_id = if self.pcb_initialized {
+                unsafe {
+                    (*cpu::ProcessorControlBlock::get_pcb_for_current_processor()).apic_processor_id
+                }
+            } else {
+                0
+            };
 
-            _ = writeln!(writer, "[{}] {}", record.level(), record.args());
+            _ = writeln!(
+                writer,
+                "[CPU{}] -> [{}] {}",
+                cpu_id,
+                record.level(),
+                record.args()
+            );
         }
     }
 

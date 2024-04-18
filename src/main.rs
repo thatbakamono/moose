@@ -19,16 +19,19 @@ mod vga;
 use crate::allocator::init_heap;
 use crate::driver::{pic::PIC, pit::PIT};
 use alloc::rc::Rc;
+use core::arch::asm;
 use core::cell::RefCell;
 use limine::paging::Mode;
 use limine::request::{FramebufferRequest, HhdmRequest, MemoryMapRequest, PagingModeRequest};
 use limine::BaseRevision;
 use log::{error, info};
+use raw_cpuid::CpuId;
 use x86_64::registers::control::{Cr4, Cr4Flags, Efer, EferFlags};
 
 use crate::driver::acpi::Acpi;
 use crate::driver::apic::{Apic, LocalApic};
 use crate::kernel::Kernel;
+use crate::logger::LOGGER;
 use crate::{
     logger::init_serial_logger,
     memory::{FrameAllocator, MemoryManager},
@@ -59,7 +62,7 @@ unsafe extern "C" fn _start() -> ! {
     assert!(BASE_REVISION.is_supported());
 
     Efer::write(Efer::read() | EferFlags::NO_EXECUTE_ENABLE);
-    Cr4::write(Cr4::read() | Cr4Flags::PAGE_GLOBAL);
+    Cr4::write(Cr4::read() | Cr4Flags::PAGE_GLOBAL | Cr4Flags::FSGSBASE);
 
     Serial::init(Port::COM1).unwrap();
 
@@ -88,10 +91,16 @@ unsafe extern "C" fn _start() -> ! {
 
     let frame_allocator = FrameAllocator::new(memory_map_response);
     let mut memory_manager = MemoryManager::new(frame_allocator, physical_memory_offset);
-
     init_heap(&mut memory_manager).expect("Failed to initialize heap");
-
     let memory_manager_ref = Rc::new(RefCell::new(memory_manager));
+
+    cpu::ProcessorControlBlock::create_pcb_for_current_processor(
+        CpuId::new()
+            .get_feature_info()
+            .unwrap()
+            .initial_local_apic_id() as u16,
+    );
+    LOGGER.pcb_initialized = true;
 
     let acpi = Rc::new(RefCell::new(Acpi::with_memory_manager(Rc::clone(
         &memory_manager_ref,
@@ -105,14 +114,12 @@ unsafe extern "C" fn _start() -> ! {
     }));
 
     let bsp_lapic = LocalApic::initialize_for_current_processor(Rc::clone(&kernel));
-    //cpu::ProcessorControlBlock::create_pcb_for_current_processor(CpuId::new().get_feature_info().unwrap().initial_local_apic_id() as u16);
 
     kernel
         .borrow()
         .apic
         .borrow()
         .setup_other_application_processors(Rc::clone(&kernel), &bsp_lapic);
-
     info!(
         "LAPIC TIMER SPEED: {}",
         kernel.borrow().apic.borrow().lapic_timer_ticks_per_second
@@ -125,7 +132,9 @@ unsafe extern "C" fn _start() -> ! {
         Vga::new(framebuffer)
     };
 
-    loop {}
+    loop {
+        asm!("hlt");
+    }
 }
 
 #[panic_handler]

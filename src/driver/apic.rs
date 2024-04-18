@@ -1,3 +1,6 @@
+use crate::arch::x86::idt::IDT;
+use crate::arch::x86::perform_arch_initialization;
+use crate::cpu;
 use crate::driver::acpi::{Acpi, MADTEntryInner};
 use crate::driver::pit::PIT;
 use crate::kernel::Kernel;
@@ -16,6 +19,7 @@ use raw_cpuid::CpuId;
 use spin::RwLock;
 use volatile::VolatilePtr;
 use x86_64::instructions::interrupts::without_interrupts;
+use x86_64::registers::control::{Cr4, Cr4Flags};
 
 const LOCAL_APIC_LAPIC_ID_REGISTER: u32 = 0x20;
 const LOCAL_APIC_LAPIC_VERSION_REGISTER: u32 = 0x23;
@@ -47,14 +51,19 @@ const STACK_SIZE: usize = 4 * 1024 * 1024;
 static TRAMPOLINE_CODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/trampoline"));
 static mut AP_STARTUP_SPINLOCK: RwLock<u8> = RwLock::new(0);
 
-pub unsafe extern "C" fn ap_start(_apic_processor_id: u64) -> ! {
-    info!("[CPU] Processor {} has started", _apic_processor_id);
+pub unsafe extern "C" fn ap_start(apic_processor_id: u64) -> ! {
+    // @TODO: Move to perform_arch_initialization()
+    IDT.load();
+    Cr4::write(Cr4::read() | Cr4Flags::FSGSBASE);
+    cpu::ProcessorControlBlock::create_pcb_for_current_processor(apic_processor_id as u16);
+
+    info!("Processor {} has started", apic_processor_id);
 
     unsafe { *AP_STARTUP_SPINLOCK.write() = 1 };
 
-    // @TODO: PCB initialization with apic_processor_id?
-
-    loop {}
+    loop {
+        asm!("hlt")
+    }
 }
 
 pub struct Apic<'a> {
