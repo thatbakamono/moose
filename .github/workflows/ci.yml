@@ -23,5 +23,8 @@ jobs:
           override: true
           components: rust-src
 
+    - name: Install NASM
+      uses: ilammy/setup-nasm@v1
+
     - name: Build
       run: cargo build --verbose
