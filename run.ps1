@@ -13,10 +13,10 @@ if ($debugging) {
 }
 
 if ($logs) {
-    [void]$command.Append('-D ./log.txt ')
+    [void]$command.Append('-d int -D ./log.txt ')
 }
 
-[void]$command.Append('-no-reboot -d int -smp 4 -drive format=raw, file=moose.iso -serial stdio ')
+[void]$command.Append('-no-reboot -smp 4 -drive format=raw,file=moose.iso -serial stdio ')
 
 ./package.ps1 -r $release
 Invoke-Expression $command.ToString()
