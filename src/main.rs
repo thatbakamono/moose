@@ -18,7 +18,7 @@ mod vga;
 
 use crate::allocator::init_heap;
 use crate::driver::{pic::PIC, pit::PIT};
-use alloc::rc::Rc;
+use alloc::sync::Arc;
 use core::arch::asm;
 use core::cell::RefCell;
 use limine::paging::Mode;
@@ -92,7 +92,7 @@ unsafe extern "C" fn _start() -> ! {
     let frame_allocator = FrameAllocator::new(memory_map_response);
     let mut memory_manager = MemoryManager::new(frame_allocator, physical_memory_offset);
     init_heap(&mut memory_manager).expect("Failed to initialize heap");
-    let memory_manager_ref = Rc::new(RefCell::new(memory_manager));
+    let memory_manager_ref = Arc::new(RefCell::new(memory_manager));
 
     cpu::ProcessorControlBlock::create_pcb_for_current_processor(
         CpuId::new()
@@ -102,28 +102,28 @@ unsafe extern "C" fn _start() -> ! {
     );
     LOGGER.pcb_initialized = true;
 
-    let acpi = Rc::new(RefCell::new(Acpi::with_memory_manager(Rc::clone(
+    let acpi = Arc::new(RefCell::new(Acpi::with_memory_manager(Arc::clone(
         &memory_manager_ref,
     ))));
-    let apic = Rc::new(RefCell::new(Apic::initialize(Rc::clone(&acpi))));
+    let apic = Arc::new(RefCell::new(Apic::initialize(Arc::clone(&acpi))));
 
-    let kernel = Rc::new(RefCell::new(Kernel {
+    let kernel = Arc::new(RefCell::new(Kernel {
         acpi,
         apic,
         memory_manager: memory_manager_ref,
+        gdt: x86_64::instructions::tables::sgdt(),
     }));
 
-    let bsp_lapic = LocalApic::initialize_for_current_processor(Rc::clone(&kernel));
-
+    let bsp_lapic = LocalApic::initialize_for_current_processor(Arc::clone(&kernel));
+    let pcb = cpu::ProcessorControlBlock::get_pcb_for_current_processor();
+    _ = (&*pcb).local_apic.set(bsp_lapic);
     kernel
         .borrow()
         .apic
         .borrow()
-        .setup_other_application_processors(Rc::clone(&kernel), &bsp_lapic);
-    info!(
-        "LAPIC TIMER SPEED: {}",
-        kernel.borrow().apic.borrow().lapic_timer_ticks_per_second
-    );
+        .setup_other_application_processors(Arc::clone(&kernel), (&*pcb).local_apic.get().unwrap());
+
+    (&*pcb).local_apic.get().unwrap().enable_timer();
 
     let vga = {
         let framebuffer_response = FRAMEBUFFER_REQUEST.get_response().unwrap();

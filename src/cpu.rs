@@ -1,18 +1,22 @@
-use alloc::alloc::alloc_zeroed;
-use core::alloc::Layout;
+use crate::driver::apic::LocalApic;
+use alloc::boxed::Box;
+use core::cell::OnceCell;
 use x86_64::registers::segmentation::{Segment64, GS};
 use x86_64::VirtAddr;
 
 pub struct ProcessorControlBlock {
     pub apic_processor_id: u16,
+    pub local_apic: OnceCell<LocalApic>,
 }
 
 impl ProcessorControlBlock {
     pub unsafe fn create_pcb_for_current_processor(apic_processor_id: u16) {
-        let layout = Layout::new::<ProcessorControlBlock>();
-        let ptr = alloc_zeroed(layout) as *mut ProcessorControlBlock;
+        let ptr = Box::leak(Box::new(ProcessorControlBlock {
+            apic_processor_id: 0xFFFF,
+            local_apic: OnceCell::new(),
+        }));
 
-        GS::write_base(VirtAddr::new(ptr as u64));
+        GS::write_base(VirtAddr::new(ptr as *mut _ as u64));
 
         (*ProcessorControlBlock::get_pcb_for_current_processor()).apic_processor_id =
             apic_processor_id;
@@ -26,6 +30,6 @@ impl ProcessorControlBlock {
     //     routine,
     // so GS will be properly initialized nearly always, and it's safe function.
     pub fn get_pcb_for_current_processor() -> *mut ProcessorControlBlock {
-        unsafe { GS::read_base().as_u64() as *mut ProcessorControlBlock }
+        GS::read_base().as_u64() as *mut ProcessorControlBlock
     }
 }

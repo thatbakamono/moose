@@ -1,4 +1,5 @@
 use bitflags::bitflags;
+use core::fmt::Debug;
 use core::ops::{Index, IndexMut};
 use limine::memory_map::EntryType;
 use limine::response::MemoryMapResponse;
@@ -8,13 +9,13 @@ use x86_64::instructions::tlb;
 pub const PAGE_SIZE: usize = 4096;
 pub const FRAME_SIZE: usize = 4096;
 
-pub struct MemoryManager<'a> {
-    frame_allocator: FrameAllocator<'a>,
+pub struct MemoryManager {
+    frame_allocator: FrameAllocator,
     physical_memory_offset: u64,
 }
 
-impl<'a> MemoryManager<'a> {
-    pub fn new(frame_allocator: FrameAllocator<'a>, physical_memory_offset: u64) -> Self {
+impl MemoryManager {
+    pub fn new(frame_allocator: FrameAllocator, physical_memory_offset: u64) -> Self {
         Self {
             frame_allocator,
             physical_memory_offset,
@@ -289,14 +290,14 @@ impl<'a> MemoryManager<'a> {
     }
 }
 
-pub struct FrameAllocator<'a> {
-    memory_map_response: &'a MemoryMapResponse,
+pub struct FrameAllocator {
+    memory_map_response: &'static MemoryMapResponse,
     n: usize,
 }
 
 // TODO: Implement more advanced frame allocator
-impl<'a> FrameAllocator<'a> {
-    pub fn new(memory_map_response: &'a MemoryMapResponse) -> Self {
+impl FrameAllocator {
+    pub fn new(memory_map_response: &'static MemoryMapResponse) -> Self {
         Self {
             memory_map_response,
             n: 0,

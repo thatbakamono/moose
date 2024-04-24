@@ -22,4 +22,5 @@ volatile = "0.5.2"
 panic = "abort"
 
 [profile.release]
+debug = true
 panic = "abort"

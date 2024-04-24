@@ -1,9 +1,7 @@
-use crate::kernel::Kernel;
 use crate::memory::{
     Frame, MemoryError, MemoryManager, Page, PageFlags, PhysicalAddress, VirtualAddress, PAGE_SIZE,
 };
-use alloc::boxed::Box;
-use alloc::rc::Rc;
+use alloc::sync::Arc;
 use alloc::{format, vec, vec::Vec};
 use core::cell::RefCell;
 use core::{mem, slice};
@@ -60,7 +58,7 @@ const BIOS_EXTENDED_AREA_MEMORY_START: u64 = 0x000E0000;
 const BIOS_EXTENDED_AREA_MEMORY_END: u64 = 0x000FFFFF;
 const PAGE_NUMBER_MASK: u64 = 0xFFFF_FFFF_F000;
 
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 #[repr(C, packed)]
 pub struct Rsdp {
     signature: [u8; 8],
@@ -96,15 +94,14 @@ pub struct Madt {
     lapic_address: u32,
 }
 
-pub struct Acpi<'a> {
-    pub rsdp: &'a Rsdp,
-    pub madt: Rc<MADT>,
-
-    memory_manager: Rc<RefCell<MemoryManager<'a>>>,
+pub struct Acpi {
+    pub rsdp: Rsdp,
+    pub madt: Arc<MADT>,
+    memory_manager: Arc<RefCell<MemoryManager>>,
 }
 
-impl<'a> Acpi<'a> {
-    pub fn with_memory_manager(memory_manager: Rc<RefCell<MemoryManager<'a>>>) -> Acpi<'a> {
+impl Acpi {
+    pub fn with_memory_manager(memory_manager: Arc<RefCell<MemoryManager>>) -> Acpi {
         // Map BIOS extended area memory
         for page in
             (BIOS_EXTENDED_AREA_MEMORY_START..BIOS_EXTENDED_AREA_MEMORY_END).step_by(PAGE_SIZE)
@@ -155,8 +152,8 @@ impl<'a> Acpi<'a> {
 
         let mut acpi = Self {
             memory_manager,
-            rsdp,
-            madt: Rc::new(MADT::default()),
+            rsdp: rsdp.clone(),
+            madt: Arc::new(MADT::default()),
         };
 
         acpi.parse_rsdt();
@@ -216,15 +213,15 @@ impl<'a> Acpi<'a> {
                 MADT_SIGNATURE => {
                     let madt = MADT::try_from(slice).unwrap();
                     info!("MADT: {:#?}", madt);
-                    self.madt = Rc::new(madt);
+                    self.madt = Arc::new(madt);
                 }
                 _ => {}
             }
         }
     }
 
-    fn validate_checksum(header: &SdtHeader) -> bool {
-        true
+    fn validate_checksum(_header: &SdtHeader) -> bool {
+        todo!()
     }
 }
 

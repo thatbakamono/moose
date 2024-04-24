@@ -7,7 +7,7 @@ pub static mut LOGGER: SerialLogger = SerialLogger {
     pcb_initialized: false,
 };
 
-struct SerialLogger {
+pub struct SerialLogger {
     pub pcb_initialized: bool,
 }
 
@@ -43,5 +43,5 @@ impl log::Log for SerialLogger {
 }
 
 pub fn init_serial_logger() -> Result<(), SetLoggerError> {
-    log::set_logger(&LOGGER).map(|()| log::set_max_level(LevelFilter::Trace))
+    unsafe { log::set_logger(&LOGGER).map(|()| log::set_max_level(LevelFilter::Trace)) }
 }

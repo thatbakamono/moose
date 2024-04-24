@@ -11,6 +11,8 @@ trampoline:
     .page_table: dq 0
     ; Pointer to kernel AP initialization routine
     .code: dq 0x1234
+    ; Pointer to Kernel instance
+    .kernel: dq 0
     ; Pointer to new processor's stack
     .stack: dq 0
     ; Processor's APIC ID
@@ -59,8 +61,8 @@ startup_ap:
 
 USE64
 long_mode_ap:
-    ; Reload segment registers
-    mov rax, gdt.kernel_data
+    ; Reload segment registers and set them to the null descriptor
+    mov rax, 0
     mov ds, rax
     mov es, rax
     mov fs, rax
@@ -72,6 +74,7 @@ long_mode_ap:
 
     ; Set arguments
     mov rdi, [trampoline.apic_id]
+    mov rsi, [trampoline.kernel]
 
     ; Perform jump to kernel's AP initialization routine
     mov rax, qword [trampoline.code]

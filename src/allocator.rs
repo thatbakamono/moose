@@ -2,7 +2,7 @@ use crate::memory::{MemoryError, MemoryManager, Page, PageFlags, VirtualAddress,
 use linked_list_allocator::LockedHeap;
 
 const HEAP_START: usize = 0x4444_4444_0000;
-const HEAP_SIZE: usize = 128 * 1024 * 1024;
+const HEAP_SIZE: usize = 48 * 1024 * 1024;
 
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
