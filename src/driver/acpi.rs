@@ -66,7 +66,6 @@ pub struct Rsdp {
     oem_id: [u8; 6],
     revision: u8,
     rsdt_address: u32,
-
     length: u32,
     xsdt_address: u64,
     ext_checksum: u8,

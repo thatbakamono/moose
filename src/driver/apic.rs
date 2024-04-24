@@ -218,7 +218,7 @@ impl Apic {
                     *AP_STARTUP_SPINLOCK.write() = 0;
                 }
 
-                self.boot_processor(&lapic, entry.apic_id);
+                self.boot_processor(lapic, entry.apic_id);
 
                 unsafe {
                     while without_interrupts(|| *AP_STARTUP_SPINLOCK.read() == 0) {
