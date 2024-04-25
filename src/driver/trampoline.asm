@@ -56,18 +56,18 @@ startup_ap:
     or ebx, 1 << 31 | 1 << 16 | 1
     mov cr0, ebx
 
-    ; far jump to enable Long Mode and load CS with 64 bit segment
-    jmp gdt.kernel_code:long_mode_ap
+    ; far jump to enable Long Mode and load CS with the first entry of GDT
+    jmp 0b01000:long_mode_ap
 
 USE64
 long_mode_ap:
-    ; Reload segment registers and set them to the null descriptor
-    mov rax, 0
-    mov ds, rax
-    mov es, rax
-    mov fs, rax
-    mov gs, rax
-    mov ss, rax
+    ; Reload segment registers to the second entry of GDT
+    mov ax, 0b10000
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
 
     ; Initialize stack
     mov rsp, [trampoline.stack]
@@ -153,7 +153,7 @@ istruc GDTEntry
     at GDTEntry.limitl, dw 0
     at GDTEntry.basel, dw 0
     at GDTEntry.basem, db 0
-    at GDTEntry.attribute, db attrib.present | attrib.user | attrib.code
+    at GDTEntry.attribute, db attrib.present | attrib.user | attrib.readable | attrib.code | attrib.accessed
     at GDTEntry.flags__limith, db flags.long_mode
     at GDTEntry.baseh, db 0
 iend
@@ -164,7 +164,7 @@ istruc GDTEntry
     at GDTEntry.basel, dw 0
     at GDTEntry.basem, db 0
 ; AMD System Programming Manual states that the writeable bit is ignored in long mode, but ss can not be set to this descriptor without it
-    at GDTEntry.attribute, db attrib.present | attrib.user | attrib.writable
+    at GDTEntry.attribute, db attrib.present | attrib.user | attrib.writable | attrib.accessed
     at GDTEntry.flags__limith, db 0
     at GDTEntry.baseh, db 0
 iend

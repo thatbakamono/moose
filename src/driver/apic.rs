@@ -59,17 +59,7 @@ pub unsafe extern "C" fn ap_start(apic_processor_id: u64, kernel_ptr: *const Ref
     let kernel = Arc::from_raw(kernel_ptr);
 
     IDT.load();
-    x86_64::instructions::tables::lgdt(&kernel.borrow().gdt);
     Cr4::write(Cr4::read() | Cr4Flags::FSGSBASE);
-
-    unsafe {
-        asm!(
-            r#"
-            mov rax, 0x30
-            mov ss, rax
-        "#
-        );
-    }
 
     ProcessorControlBlock::create_pcb_for_current_processor(apic_processor_id as u16);
     let pcb = ProcessorControlBlock::get_pcb_for_current_processor();
