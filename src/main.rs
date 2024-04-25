@@ -31,9 +31,8 @@ use x86_64::registers::control::{Cr4, Cr4Flags, Efer, EferFlags};
 use crate::driver::acpi::Acpi;
 use crate::driver::apic::{Apic, LocalApic};
 use crate::kernel::Kernel;
-use crate::logger::LOGGER;
 use crate::{
-    logger::init_serial_logger,
+    logger::{init_logger, switch_to_post_boot_logger},
     memory::{FrameAllocator, MemoryManager},
     serial::{Port, Serial},
     vga::Vga,
@@ -66,7 +65,7 @@ unsafe extern "C" fn _start() -> ! {
 
     Serial::init(Port::COM1).unwrap();
 
-    init_serial_logger().unwrap();
+    init_logger().unwrap();
 
     info!("Hello, moose!");
 
@@ -100,7 +99,6 @@ unsafe extern "C" fn _start() -> ! {
             .unwrap()
             .initial_local_apic_id() as u16,
     );
-    LOGGER.pcb_initialized = true;
 
     let acpi = Arc::new(RefCell::new(Acpi::with_memory_manager(Arc::clone(
         &memory_manager_ref,
@@ -122,6 +120,8 @@ unsafe extern "C" fn _start() -> ! {
         .apic
         .borrow()
         .setup_other_application_processors(Arc::clone(&kernel), (&*pcb).local_apic.get().unwrap());
+
+    switch_to_post_boot_logger();
 
     (&*pcb).local_apic.get().unwrap().enable_timer();
 
