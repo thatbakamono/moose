@@ -11,7 +11,6 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::alloc::Layout;
 use core::arch::asm;
-use core::cell::RefCell;
 use core::ptr;
 use log::{debug, info};
 use raw_cpuid::CpuId;
@@ -54,7 +53,7 @@ const LOCAL_APIC_TIMER_PERIODIC: u32 = 1 << 17;
 static TRAMPOLINE_CODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/trampoline"));
 static mut AP_STARTUP_SPINLOCK: RwLock<u8> = RwLock::new(0);
 
-pub unsafe extern "C" fn ap_start(apic_processor_id: u64, kernel_ptr: *const RefCell<Kernel>) -> ! {
+pub unsafe extern "C" fn ap_start(apic_processor_id: u64, kernel_ptr: *const RwLock<Kernel>) -> ! {
     // @TODO: Move to perform_arch_initialization()
     let kernel = Arc::from_raw(kernel_ptr);
 
@@ -79,11 +78,11 @@ pub unsafe extern "C" fn ap_start(apic_processor_id: u64, kernel_ptr: *const Ref
 pub struct Apic {
     pub lapic_timer_ticks_per_second: u64,
     pub io_apic: Box<IoApic>,
-    pub acpi: Arc<RefCell<Acpi>>,
+    pub acpi: Arc<Acpi>,
 }
 
 impl Apic {
-    pub fn initialize(acpi: Arc<RefCell<Acpi>>) -> Apic {
+    pub fn initialize(acpi: Arc<Acpi>) -> Apic {
         // Check if CPU supports APIC
         let cpuid = CpuId::new();
         assert!(
@@ -92,9 +91,8 @@ impl Apic {
         );
 
         let io_apic_address = {
-            let binding = acpi.borrow();
             // There can be multiple I/O APIC chips in the system, but now we'll only use one.
-            let io_apic_entry = binding
+            let io_apic_entry = acpi
                 .madt
                 .entries
                 .iter()
@@ -124,15 +122,15 @@ impl Apic {
 
     pub fn setup_other_application_processors(
         &self,
-        kernel: Arc<RefCell<Kernel>>,
+        kernel: Arc<RwLock<Kernel>>,
         lapic: &LocalApic,
     ) {
         let args = unsafe {
             // Map 0x8000 into memory. This shouldn't be mapped currently.
             kernel
-                .borrow()
+                .read()
                 .memory_manager
-                .borrow_mut()
+                .write()
                 .map(
                     &Page::new(VirtualAddress::new(0x8000)),
                     &Frame::new(PhysicalAddress::new(0x8000)),
@@ -171,7 +169,6 @@ impl Apic {
             .unwrap()
             .initial_local_apic_id() as u16;
         self.acpi
-            .borrow()
             .madt
             .entries
             .iter()
@@ -337,11 +334,11 @@ impl IoApic {
 
 pub struct LocalApic {
     local_apic_base: u64,
-    kernel: Arc<RefCell<Kernel>>,
+    kernel: Arc<RwLock<Kernel>>,
 }
 
 impl LocalApic {
-    pub fn initialize_for_current_processor(kernel: Arc<RefCell<Kernel>>) -> LocalApic {
+    pub fn initialize_for_current_processor(kernel: Arc<RwLock<Kernel>>) -> LocalApic {
         let apic_base =
             unsafe { x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR).read() };
         let local_apic_base = apic_base & APIC_BASE_MSR_APIC_BASE_FIELD_MASK;
@@ -349,7 +346,7 @@ impl LocalApic {
         // Make sure local apic base is mapped into memory
         // It is always on 4KiB boundary
         unsafe {
-            match kernel.borrow().memory_manager.borrow_mut().map(
+            match kernel.read().memory_manager.write().map(
                 &Page::new(VirtualAddress::new(local_apic_base)),
                 &Frame::new(PhysicalAddress::new(local_apic_base)),
                 PageFlags::WRITABLE | PageFlags::WRITE_THROUGH | PageFlags::DISABLE_CACHING,
@@ -389,13 +386,7 @@ impl LocalApic {
 
     pub fn enable_timer(&self) {
         // Fire timer every 10ms
-        let ticks_per_10ms = self
-            .kernel
-            .borrow()
-            .apic
-            .borrow()
-            .lapic_timer_ticks_per_second
-            / 100;
+        let ticks_per_10ms = self.kernel.read().apic.read().lapic_timer_ticks_per_second / 100;
 
         // Enable interrupts
         self.write_register(LOCAL_APIC_TASK_PRIORITY_REGISTER, 0);
@@ -443,11 +434,7 @@ impl LocalApic {
 
         let ticks_per_second = 0xFFFFFFFF - self.read_register(LOCAL_APIC_CURRENT_COUNT_REGISTER);
 
-        self.kernel
-            .borrow()
-            .apic
-            .borrow_mut()
-            .lapic_timer_ticks_per_second = ticks_per_second as u64;
+        self.kernel.read().apic.write().lapic_timer_ticks_per_second = ticks_per_second as u64;
     }
 
     fn read_register(&self, register: u32) -> u32 {

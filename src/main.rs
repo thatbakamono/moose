@@ -20,12 +20,12 @@ use crate::allocator::init_heap;
 use crate::driver::{pic::PIC, pit::PIT};
 use alloc::sync::Arc;
 use core::arch::asm;
-use core::cell::RefCell;
 use limine::paging::Mode;
 use limine::request::{FramebufferRequest, HhdmRequest, MemoryMapRequest, PagingModeRequest};
 use limine::BaseRevision;
 use log::{error, info};
 use raw_cpuid::CpuId;
+use spin::RwLock;
 use x86_64::registers::control::{Cr4, Cr4Flags, Efer, EferFlags};
 
 use crate::driver::acpi::Acpi;
@@ -91,7 +91,7 @@ unsafe extern "C" fn _start() -> ! {
     let frame_allocator = FrameAllocator::new(memory_map_response);
     let mut memory_manager = MemoryManager::new(frame_allocator, physical_memory_offset);
     init_heap(&mut memory_manager).expect("Failed to initialize heap");
-    let memory_manager_ref = Arc::new(RefCell::new(memory_manager));
+    let memory_manager_ref = Arc::new(RwLock::new(memory_manager));
 
     cpu::ProcessorControlBlock::create_pcb_for_current_processor(
         CpuId::new()
@@ -100,12 +100,10 @@ unsafe extern "C" fn _start() -> ! {
             .initial_local_apic_id() as u16,
     );
 
-    let acpi = Arc::new(RefCell::new(Acpi::with_memory_manager(Arc::clone(
-        &memory_manager_ref,
-    ))));
-    let apic = Arc::new(RefCell::new(Apic::initialize(Arc::clone(&acpi))));
+    let acpi = Arc::new(Acpi::with_memory_manager(Arc::clone(&memory_manager_ref)));
+    let apic = Arc::new(RwLock::new(Apic::initialize(Arc::clone(&acpi))));
 
-    let kernel = Arc::new(RefCell::new(Kernel {
+    let kernel = Arc::new(RwLock::new(Kernel {
         acpi,
         apic,
         memory_manager: memory_manager_ref,
@@ -114,16 +112,18 @@ unsafe extern "C" fn _start() -> ! {
 
     let bsp_lapic = LocalApic::initialize_for_current_processor(Arc::clone(&kernel));
     let pcb = cpu::ProcessorControlBlock::get_pcb_for_current_processor();
-    _ = (&*pcb).local_apic.set(bsp_lapic);
+
+    _ = (*pcb).local_apic.set(bsp_lapic);
+
     kernel
-        .borrow()
+        .read()
         .apic
-        .borrow()
-        .setup_other_application_processors(Arc::clone(&kernel), (&*pcb).local_apic.get().unwrap());
+        .read()
+        .setup_other_application_processors(Arc::clone(&kernel), (*pcb).local_apic.get().unwrap());
 
     switch_to_post_boot_logger();
 
-    (&*pcb).local_apic.get().unwrap().enable_timer();
+    (*pcb).local_apic.get().unwrap().enable_timer();
 
     let vga = {
         let framebuffer_response = FRAMEBUFFER_REQUEST.get_response().unwrap();

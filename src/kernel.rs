@@ -2,12 +2,12 @@ use crate::driver::acpi::Acpi;
 use crate::driver::apic::Apic;
 use crate::memory::MemoryManager;
 use alloc::sync::Arc;
-use core::cell::RefCell;
+use spin::RwLock;
 use x86_64::structures::DescriptorTablePointer;
 
 pub struct Kernel {
-    pub acpi: Arc<RefCell<Acpi>>,
-    pub apic: Arc<RefCell<Apic>>,
-    pub memory_manager: Arc<RefCell<MemoryManager>>,
+    pub acpi: Arc<Acpi>,
+    pub apic: Arc<RwLock<Apic>>,
+    pub memory_manager: Arc<RwLock<MemoryManager>>,
     pub gdt: DescriptorTablePointer,
 }

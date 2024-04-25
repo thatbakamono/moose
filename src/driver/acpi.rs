@@ -3,11 +3,11 @@ use crate::memory::{
 };
 use alloc::sync::Arc;
 use alloc::{format, vec, vec::Vec};
-use core::cell::RefCell;
 use core::{mem, slice};
 use deku::bitvec::{BitSlice, Msb0};
 use deku::{DekuEnumExt, DekuError, DekuRead};
 use log::info;
+use spin::RwLock;
 
 /// Root System Description Pointer Signature
 const RSDP_SIGNATURE: [u8; 8] = *b"RSD PTR ";
@@ -96,18 +96,18 @@ pub struct Madt {
 pub struct Acpi {
     pub rsdp: Rsdp,
     pub madt: Arc<MADT>,
-    memory_manager: Arc<RefCell<MemoryManager>>,
+    memory_manager: Arc<RwLock<MemoryManager>>,
 }
 
 impl Acpi {
-    pub fn with_memory_manager(memory_manager: Arc<RefCell<MemoryManager>>) -> Acpi {
+    pub fn with_memory_manager(memory_manager: Arc<RwLock<MemoryManager>>) -> Acpi {
         // Map BIOS extended area memory
         for page in
             (BIOS_EXTENDED_AREA_MEMORY_START..BIOS_EXTENDED_AREA_MEMORY_END).step_by(PAGE_SIZE)
         {
             unsafe {
                 memory_manager
-                    .borrow_mut()
+                    .write()
                     .map(
                         &Page::new(VirtualAddress::new(page)),
                         &Frame::new(PhysicalAddress::new(page)),
@@ -141,7 +141,7 @@ impl Acpi {
         let rsdt_address = rsdp.rsdt_address as u64;
 
         unsafe {
-            memory_manager.borrow_mut().map(
+            memory_manager.write().map(
                 &Page::new(VirtualAddress::new(rsdt_address & 0xFFFF_FFFF_F000)),
                 &Frame::new(PhysicalAddress::new(rsdt_address & 0xFFFF_FFFF_F000)),
                 PageFlags::empty(),
@@ -151,7 +151,7 @@ impl Acpi {
 
         let mut acpi = Self {
             memory_manager,
-            rsdp: rsdp.clone(),
+            rsdp: *rsdp,
             madt: Arc::new(MADT::default()),
         };
 
@@ -175,12 +175,12 @@ impl Acpi {
             let address_to_pointer_to_another_table = (self.rsdp.rsdt_address
                 + (mem::size_of::<SdtHeader>() as u32)
                 + (entry * 4)) as *const u32;
-            let pointer_to_entry_header = unsafe { &*address_to_pointer_to_another_table }.clone();
+            let pointer_to_entry_header = unsafe { *address_to_pointer_to_another_table };
 
             // Map table into memory
             unsafe {
                 let page_number = pointer_to_entry_header as u64 & PAGE_NUMBER_MASK;
-                match self.memory_manager.borrow_mut().map(
+                match self.memory_manager.write().map(
                     &Page::new(VirtualAddress::new(page_number)),
                     &Frame::new(PhysicalAddress::new(page_number)),
                     PageFlags::empty(),
