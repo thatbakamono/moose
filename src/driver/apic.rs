@@ -81,7 +81,9 @@ pub unsafe extern "C" fn ap_start(apic_processor_id: u64, kernel_ptr: *const Ref
     *AP_STARTUP_SPINLOCK.write() = 1;
     info!("Processor {:p} has started", pcb);
 
-    loop {}
+    loop {
+        asm!("hlt");
+    }
 }
 
 pub struct Apic {
