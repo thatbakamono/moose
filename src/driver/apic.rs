@@ -7,7 +7,6 @@ use crate::memory::{
     Frame, MemoryError, Page, PageFlags, PhysicalAddress, VirtualAddress, PAGE_SIZE,
 };
 use alloc::alloc::alloc_zeroed;
-use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::alloc::Layout;
 use core::arch::asm;
@@ -77,7 +76,6 @@ pub unsafe extern "C" fn ap_start(apic_processor_id: u64, kernel_ptr: *const RwL
 
 pub struct Apic {
     pub lapic_timer_ticks_per_second: u64,
-    pub io_apic: Box<IoApic>,
     pub acpi: Arc<Acpi>,
 }
 
@@ -90,34 +88,12 @@ impl Apic {
             "CPU does not support APIC"
         );
 
-        let io_apic_address = {
-            // There can be multiple I/O APIC chips in the system, but now we'll only use one.
-            let io_apic_entry = acpi
-                .madt
-                .entries
-                .iter()
-                .filter_map(|entry| {
-                    if let MADTEntryInner::IOAPIC(io_apic) = &entry.inner {
-                        Some(io_apic)
-                    } else {
-                        None
-                    }
-                })
-                .next()
-                .unwrap();
-
-            io_apic_entry.io_apic_address
-        };
-
         unsafe { IDT[TIMER_IRQ as u8].set_handler_fn(timer_interrupt_handler) };
 
-        let apic = Apic {
+        Apic {
             lapic_timer_ticks_per_second: 0,
-            io_apic: Box::new(unsafe { IoApic::with_address(io_apic_address as u64) }),
             acpi,
-        };
-
-        apic
+        }
     }
 
     pub fn setup_other_application_processors(
@@ -299,35 +275,6 @@ impl Apic {
                     | 0x608,
             );
             unsafe { PIT.wait_sixteen_millis() }
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct IoApic {
-    io_apic_address_register: *mut u32,
-    io_apic_data_register: *mut u32,
-}
-
-impl IoApic {
-    pub unsafe fn with_address(io_apic_address: u64) -> Self {
-        Self {
-            io_apic_address_register: io_apic_address as *mut u32,
-            io_apic_data_register: (io_apic_address + 4) as *mut u32,
-        }
-    }
-
-    fn read_register(&self, register: u32) -> u32 {
-        unsafe {
-            ptr::write_volatile(self.io_apic_address_register, register & 0xFF);
-            ptr::read_volatile(self.io_apic_data_register)
-        }
-    }
-
-    fn write_register(&self, register: u32, value: u32) {
-        unsafe {
-            ptr::write_volatile(self.io_apic_address_register, register & 0xFF);
-            ptr::write_volatile(self.io_apic_data_register, value);
         }
     }
 }
