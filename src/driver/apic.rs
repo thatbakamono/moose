@@ -1,6 +1,6 @@
 use crate::arch::x86::idt::IDT;
 use crate::cpu::ProcessorControlBlock;
-use crate::driver::acpi::{Acpi, MADTEntryInner};
+use crate::driver::acpi::{Acpi, MadtEntryInner};
 use crate::driver::pit::PIT;
 use crate::kernel::Kernel;
 use crate::memory::{
@@ -61,10 +61,10 @@ pub unsafe extern "C" fn ap_start(apic_processor_id: u64, kernel_ptr: *const RwL
 
     ProcessorControlBlock::create_pcb_for_current_processor(apic_processor_id as u16);
     let pcb = ProcessorControlBlock::get_pcb_for_current_processor();
-    let lapic = LocalApic::initialize_for_current_processor(Arc::clone(&kernel));
-    lapic.enable_timer();
+    let local_apic = LocalApic::initialize_for_current_processor(Arc::clone(&kernel));
+    local_apic.enable_timer();
 
-    _ = (*pcb).local_apic.set(lapic);
+    _ = (*pcb).local_apic.set(local_apic);
 
     *AP_STARTUP_SPINLOCK.write() = 1;
     info!("Processor {:p} has started", pcb);
@@ -75,7 +75,7 @@ pub unsafe extern "C" fn ap_start(apic_processor_id: u64, kernel_ptr: *const RwL
 }
 
 pub struct Apic {
-    pub lapic_timer_ticks_per_second: u64,
+    pub local_apic_timer_ticks_per_second: u64,
     pub acpi: Arc<Acpi>,
 }
 
@@ -91,7 +91,7 @@ impl Apic {
         unsafe { IDT[TIMER_IRQ as u8].set_handler_fn(timer_interrupt_handler) };
 
         Apic {
-            lapic_timer_ticks_per_second: 0,
+            local_apic_timer_ticks_per_second: 0,
             acpi,
         }
     }
@@ -99,7 +99,7 @@ impl Apic {
     pub fn setup_other_application_processors(
         &self,
         kernel: Arc<RwLock<Kernel>>,
-        lapic: &LocalApic,
+        local_apic: &LocalApic,
     ) {
         let args = unsafe {
             // Map 0x8000 into memory. This shouldn't be mapped currently.
@@ -133,7 +133,7 @@ impl Apic {
                     .as_u64(),
             );
             // Address of kernel's AP initialization routine
-            args.offset(1).write(ap_start as u64);
+            args.offset(1).write(ap_start as usize as u64);
             // Address of Kernel instance
             args.offset(2).write(Arc::into_raw(kernel.clone()) as u64);
 
@@ -149,7 +149,7 @@ impl Apic {
             .entries
             .iter()
             .filter_map(|entry| {
-                if let MADTEntryInner::ProcessorLocalAPIC(local_apic) = &entry.inner {
+                if let MadtEntryInner::ProcessorLocalApic(local_apic) = &entry.inner {
                     Some(local_apic)
                 } else {
                     None
@@ -183,7 +183,7 @@ impl Apic {
                     *AP_STARTUP_SPINLOCK.write() = 0;
                 }
 
-                self.boot_processor(lapic, entry.apic_id);
+                self.boot_processor(local_apic, entry.apic_id);
 
                 unsafe {
                     while without_interrupts(|| *AP_STARTUP_SPINLOCK.read() == 0) {
@@ -333,7 +333,13 @@ impl LocalApic {
 
     pub fn enable_timer(&self) {
         // Fire timer every 10ms
-        let ticks_per_10ms = self.kernel.read().apic.read().lapic_timer_ticks_per_second / 100;
+        let ticks_per_10ms = self
+            .kernel
+            .read()
+            .apic
+            .read()
+            .local_apic_timer_ticks_per_second
+            / 100;
 
         // Enable interrupts
         self.write_register(LOCAL_APIC_TASK_PRIORITY_REGISTER, 0);
@@ -381,7 +387,11 @@ impl LocalApic {
 
         let ticks_per_second = 0xFFFFFFFF - self.read_register(LOCAL_APIC_CURRENT_COUNT_REGISTER);
 
-        self.kernel.read().apic.write().lapic_timer_ticks_per_second = ticks_per_second as u64;
+        self.kernel
+            .read()
+            .apic
+            .write()
+            .local_apic_timer_ticks_per_second = ticks_per_second as u64;
     }
 
     fn read_register(&self, register: u32) -> u32 {

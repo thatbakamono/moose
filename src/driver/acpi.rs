@@ -86,16 +86,9 @@ pub struct SdtHeader {
     creator_revision: u32,
 }
 
-#[derive(Debug, Default)]
-#[repr(C, packed)]
-pub struct Madt {
-    header: SdtHeader,
-    lapic_address: u32,
-}
-
 pub struct Acpi {
     pub rsdp: Rsdp,
-    pub madt: Arc<MADT>,
+    pub madt: Arc<Madt>,
     memory_manager: Arc<RwLock<MemoryManager>>,
 }
 
@@ -152,7 +145,7 @@ impl Acpi {
         let mut acpi = Self {
             memory_manager,
             rsdp: *rsdp,
-            madt: Arc::new(MADT::default()),
+            madt: Arc::new(Madt::default()),
         };
 
         acpi.parse_rsdt();
@@ -210,7 +203,7 @@ impl Acpi {
 
             match entry_header.signature {
                 MADT_SIGNATURE => {
-                    let madt = MADT::try_from(slice).unwrap();
+                    let madt = Madt::try_from(slice).unwrap();
                     info!("MADT: {:#?}", madt);
                     self.madt = Arc::new(madt);
                 }
@@ -225,9 +218,9 @@ impl Acpi {
 }
 
 #[derive(DekuRead, Debug, Default)]
-#[deku(magic = b"APIC")]
 #[repr(C)]
-pub struct MADT {
+#[deku(magic = b"APIC")]
+pub struct Madt {
     pub length: u32,
     pub revision: u8,
     pub checksum: u8,
@@ -240,42 +233,42 @@ pub struct MADT {
     pub local_apic_address: u32,
     pub flags: u32,
     #[deku(reader = "madt_reader((*length as usize), deku::rest)")]
-    pub entries: Vec<MADTEntry>,
+    pub entries: Vec<MadtEntry>,
 }
 
 #[derive(DekuRead, Debug, Clone)]
 #[repr(C)]
-pub struct MADTEntry {
+pub struct MadtEntry {
     pub entry_type: u8,
     pub record_length: u8,
     #[deku(ctx = "*entry_type")]
-    pub inner: MADTEntryInner,
+    pub inner: MadtEntryInner,
 }
 
 #[derive(DekuRead, Debug, Clone)]
 #[deku(ctx = "entry_type: u8", id = "entry_type")]
 #[repr(C)]
-pub enum MADTEntryInner {
+pub enum MadtEntryInner {
     #[deku(id = "0")]
-    ProcessorLocalAPIC(MadtProcessorLocalAPIC),
+    ProcessorLocalApic(MadtProcessorLocalApic),
     #[deku(id = "1")]
-    IOAPIC(MadtIOAPIC),
+    IoApic(MadtIoApic),
     #[deku(id = "2")]
-    IOAPICInterruptSourceOverride(MadtIOAPICInterruptSourceOverride),
+    IoApicInterruptSourceOverride(MadtIoApicInterruptSourceOverride),
     #[deku(id = "3")]
-    IOAPICNonMaskableInterruptSource(MadtIOAPICNonMaskableInterruptSource),
+    IoApicNonMaskableInterruptSource(MadtIoApicNonMaskableInterruptSource),
     #[deku(id = "4")]
-    LocalAPICNonMaskableInterrupts(MadtLocalAPICNonMaskableInterrupts),
+    LocalApicNonMaskableInterrupts(MadtLocalApicNonMaskableInterrupts),
     #[deku(id = "5")]
-    LocalAPICAddressOverride(MadtLocalAPICAddressOverride),
+    LocalApicAddressOverride(MadtLocalApicAddressOverride),
     // 6 - I/O SAPIC
     // 7 - Local SAPIC
     // 8 - Platofrm Interrupt Sources
     #[deku(id = "9")]
-    ProcessorLocalx2APIC(MadtProcessorLocalx2APIC),
+    ProcessorLocalx2Apic(MadtProcessorLocalx2Apic),
     // 10 - Local x2APIC NMI
     #[deku(id = "10")]
-    Localx2APICNonMaskableInterrupts(MadtLocalx2APICNonMaskableInterrupts),
+    Localx2ApicNonMaskableInterrupts(MadtLocalx2ApicNonMaskableInterrupts),
     // 11 - GIC CPU Interface
     // 12 - GIC Distributor
     // 13 - GIC MSI Frame
@@ -293,7 +286,7 @@ pub enum MADTEntryInner {
 
 #[derive(DekuRead, Debug, Clone)]
 #[repr(C)]
-pub struct MadtProcessorLocalAPIC {
+pub struct MadtProcessorLocalApic {
     pub acpi_processor_id: u8,
     pub apic_id: u8,
     pub flags: u32,
@@ -301,7 +294,7 @@ pub struct MadtProcessorLocalAPIC {
 
 #[derive(DekuRead, Debug, Clone)]
 #[repr(C)]
-pub struct MadtIOAPIC {
+pub struct MadtIoApic {
     pub io_apic_id: u8,
     pub _reserved: u8,
     pub io_apic_address: u32,
@@ -310,7 +303,7 @@ pub struct MadtIOAPIC {
 
 #[derive(DekuRead, Debug, Clone)]
 #[repr(C)]
-pub struct MadtIOAPICInterruptSourceOverride {
+pub struct MadtIoApicInterruptSourceOverride {
     pub nmi_source: u8,
     pub _reserved: u8,
     pub global_system_interrupt: u32,
@@ -319,14 +312,14 @@ pub struct MadtIOAPICInterruptSourceOverride {
 
 #[derive(DekuRead, Debug, Clone)]
 #[repr(C)]
-pub struct MadtIOAPICNonMaskableInterruptSource {
+pub struct MadtIoApicNonMaskableInterruptSource {
     pub flags: u16,
     pub global_system_interrupt: u32,
 }
 
 #[derive(DekuRead, Debug, Clone)]
 #[repr(C)]
-pub struct MadtLocalAPICNonMaskableInterrupts {
+pub struct MadtLocalApicNonMaskableInterrupts {
     pub acpi_processor_id: u8,
     pub flags: u16,
     pub lint: u8,
@@ -334,14 +327,14 @@ pub struct MadtLocalAPICNonMaskableInterrupts {
 
 #[derive(DekuRead, Debug, Clone)]
 #[repr(C)]
-pub struct MadtLocalAPICAddressOverride {
+pub struct MadtLocalApicAddressOverride {
     pub _reserved: u16,
     pub address: u64,
 }
 
 #[derive(DekuRead, Debug, Clone)]
 #[repr(C)]
-pub struct MadtProcessorLocalx2APIC {
+pub struct MadtProcessorLocalx2Apic {
     pub _reserved: u16,
     pub processors_local_x2apic_id: u32,
     pub flags: u32,
@@ -350,7 +343,7 @@ pub struct MadtProcessorLocalx2APIC {
 
 #[derive(DekuRead, Debug, Clone)]
 #[repr(C)]
-pub struct MadtLocalx2APICNonMaskableInterrupts {
+pub struct MadtLocalx2ApicNonMaskableInterrupts {
     pub flags: u16,
     pub acpi_processor_uid: u32,
     pub local_x2apic_lint: u8,
@@ -361,7 +354,7 @@ pub struct MadtLocalx2APICNonMaskableInterrupts {
 fn madt_reader(
     length: usize,
     rest: &BitSlice<u8, Msb0>,
-) -> Result<(&BitSlice<u8, Msb0>, Vec<MADTEntry>), DekuError> {
+) -> Result<(&BitSlice<u8, Msb0>, Vec<MadtEntry>), DekuError> {
     let mut remaining_bytes = length - 0x2C;
 
     let mut entries = vec![];
@@ -369,7 +362,7 @@ fn madt_reader(
     let mut rest = rest;
 
     while remaining_bytes > 0 {
-        let (remaining_slice, entry) = MADTEntry::read(rest, ())?;
+        let (remaining_slice, entry) = MadtEntry::read(rest, ())?;
 
         rest = remaining_slice;
         remaining_bytes -= entry.record_length as usize;
