@@ -5,7 +5,7 @@ mkdir iso_root/boot
 mkdir iso_root/boot/limine
 mkdir iso_root/EFI/BOOT
 
-cp -v target/x86_64-moose/release/moose iso_root/boot/
+cp -v target/x86_64-moose/debug/moose iso_root/boot/
 
 cp -v limine.cfg limine/limine-bios.sys limine/limine-bios-cd.bin \
       limine/limine-uefi-cd.bin iso_root/boot/limine/
