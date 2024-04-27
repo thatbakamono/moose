@@ -1,4 +1,5 @@
 #![feature(abi_x86_interrupt)]
+#![feature(strict_provenance)]
 #![no_std]
 #![no_main]
 
@@ -6,8 +7,10 @@ extern crate alloc;
 
 mod allocator;
 mod arch;
+mod cpu;
 mod driver;
 mod font;
+mod kernel;
 mod logger;
 mod memory;
 mod serial;
@@ -15,14 +18,21 @@ mod vga;
 
 use crate::allocator::init_heap;
 use crate::driver::{pic::PIC, pit::PIT};
+use alloc::sync::Arc;
+use core::arch::asm;
 use limine::paging::Mode;
 use limine::request::{FramebufferRequest, HhdmRequest, MemoryMapRequest, PagingModeRequest};
 use limine::BaseRevision;
 use log::{error, info};
+use raw_cpuid::CpuId;
+use spin::RwLock;
 use x86_64::registers::control::{Cr4, Cr4Flags, Efer, EferFlags};
 
+use crate::driver::acpi::Acpi;
+use crate::driver::apic::{Apic, LocalApic};
+use crate::kernel::Kernel;
 use crate::{
-    logger::init_serial_logger,
+    logger::{init_logger, switch_to_post_boot_logger},
     memory::{FrameAllocator, MemoryManager},
     serial::{Port, Serial},
     vga::Vga,
@@ -51,11 +61,11 @@ unsafe extern "C" fn _start() -> ! {
     assert!(BASE_REVISION.is_supported());
 
     Efer::write(Efer::read() | EferFlags::NO_EXECUTE_ENABLE);
-    Cr4::write(Cr4::read() | Cr4Flags::PAGE_GLOBAL);
+    Cr4::write(Cr4::read() | Cr4Flags::PAGE_GLOBAL | Cr4Flags::FSGSBASE);
 
     Serial::init(Port::COM1).unwrap();
 
-    init_serial_logger().unwrap();
+    init_logger().unwrap();
 
     info!("Hello, moose!");
 
@@ -67,7 +77,7 @@ unsafe extern "C" fn _start() -> ! {
     PIT.initialize();
 
     info!("Waiting started");
-    PIT.wait(1);
+    PIT.wait_seconds(1);
     info!("Waiting has ended");
 
     let memory_map_response = MEMORY_MAP_REQUEST.get_response().unwrap();
@@ -80,8 +90,40 @@ unsafe extern "C" fn _start() -> ! {
 
     let frame_allocator = FrameAllocator::new(memory_map_response);
     let mut memory_manager = MemoryManager::new(frame_allocator, physical_memory_offset);
-
     init_heap(&mut memory_manager).expect("Failed to initialize heap");
+    let memory_manager_ref = Arc::new(RwLock::new(memory_manager));
+
+    cpu::ProcessorControlBlock::create_pcb_for_current_processor(
+        CpuId::new()
+            .get_feature_info()
+            .unwrap()
+            .initial_local_apic_id() as u16,
+    );
+
+    let acpi = Arc::new(Acpi::with_memory_manager(Arc::clone(&memory_manager_ref)));
+    let apic = Arc::new(RwLock::new(Apic::initialize(Arc::clone(&acpi))));
+
+    let kernel = Arc::new(RwLock::new(Kernel {
+        acpi,
+        apic,
+        memory_manager: memory_manager_ref,
+        gdt: x86_64::instructions::tables::sgdt(),
+    }));
+
+    let bsp_lapic = LocalApic::initialize_for_current_processor(Arc::clone(&kernel));
+    let pcb = cpu::ProcessorControlBlock::get_pcb_for_current_processor();
+
+    _ = (*pcb).local_apic.set(bsp_lapic);
+
+    kernel
+        .read()
+        .apic
+        .read()
+        .setup_other_application_processors(Arc::clone(&kernel), (*pcb).local_apic.get().unwrap());
+
+    switch_to_post_boot_logger();
+
+    (*pcb).local_apic.get().unwrap().enable_timer();
 
     let vga = {
         let framebuffer_response = FRAMEBUFFER_REQUEST.get_response().unwrap();
@@ -90,7 +132,9 @@ unsafe extern "C" fn _start() -> ! {
         Vga::new(framebuffer)
     };
 
-    loop {}
+    loop {
+        asm!("hlt");
+    }
 }
 
 #[panic_handler]

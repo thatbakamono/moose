@@ -1,4 +1,5 @@
 use crate::arch::x86::asm::{inb, outb};
+use spin::Mutex;
 
 const COM1: u16 = 0x3f8;
 
@@ -51,6 +52,7 @@ impl Serial {
         };
 
         for byte in text.bytes() {
+            while inb(port + 5) & 0x20 == 0 {}
             outb(port, byte);
         }
     }
@@ -61,6 +63,7 @@ impl Serial {
         };
 
         for byte in text.bytes() {
+            while inb(port + 5) & 0x20 == 0 {}
             outb(port, byte);
         }
 
@@ -78,9 +81,16 @@ impl SerialWriter {
     }
 }
 
+static mut TERMINAL_WRITABLE: Mutex<bool> = Mutex::new(true);
+
 impl core::fmt::Write for SerialWriter {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        Serial::write(self.port, s);
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            let mut lock = unsafe { TERMINAL_WRITABLE.lock() };
+            *lock = false;
+            Serial::write(self.port, s);
+            *lock = true;
+        });
 
         Ok(())
     }
