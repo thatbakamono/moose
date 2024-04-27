@@ -16,7 +16,7 @@ if ($logs) {
     [void]$command.Append('-d int -D ./log.txt ')
 }
 
-[void]$command.Append('-no-reboot -cpu qemu64,apic,fsgsbase -smp 4 -m 128M -drive format=raw,file=moose.iso -serial stdio ')
+[void]$command.Append('-no-reboot -cpu qemu64,apic,fsgsbase -smp 4 -m 256M -drive format=raw,file=moose.iso -serial stdio ')
 
 ./package.ps1 -r $release
 Invoke-Expression $command.ToString()
