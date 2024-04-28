@@ -18,5 +18,11 @@ if ($logs) {
 
 [void]$command.Append('-no-reboot -cpu qemu64,apic,fsgsbase -smp 4 -m 256M -drive format=raw,file=moose.iso -serial stdio ')
 
-./package.ps1 -r $release
+if ($release) {
+    ./package.ps1 -r
+}
+else {
+    ./package.ps1
+}
+
 Invoke-Expression $command.ToString()
