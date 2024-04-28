@@ -217,5 +217,8 @@ impl Vga {
     }
 }
 
+// Safety: This is safe only if Vga has exclusive access to the framebuffer.
+unsafe impl Send for Vga {}
+
 #[derive(Clone, Copy)]
 pub struct Rgb(pub u8, pub u8, pub u8);

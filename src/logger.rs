@@ -1,4 +1,4 @@
-use crate::{cpu, serial::Serial};
+use crate::{cpu, serial::Serial, terminal::Terminal};
 use alloc::sync::Arc;
 use core::fmt::Write;
 use log::{LevelFilter, Log, SetLoggerError};
@@ -58,11 +58,12 @@ impl Log for SwitchableLogger {
 
 struct BootLogger {
     serial: Arc<Mutex<Serial>>,
+    terminal: Arc<Mutex<Terminal>>,
 }
 
 impl BootLogger {
-    const fn new(serial: Arc<Mutex<Serial>>) -> Self {
-        Self { serial }
+    const fn new(serial: Arc<Mutex<Serial>>, terminal: Arc<Mutex<Terminal>>) -> Self {
+        Self { serial, terminal }
     }
 }
 
@@ -74,9 +75,16 @@ impl Log for BootLogger {
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
             interrupts::without_interrupts(|| {
-                let mut serial = self.serial.lock();
+                {
+                    let mut serial = self.serial.lock();
 
-                _ = writeln!(&mut serial, "[{}] {}", record.level(), record.args());
+                    _ = writeln!(&mut serial, "[{}] {}", record.level(), record.args());
+                }
+                {
+                    let mut terminal = self.terminal.lock();
+
+                    _ = writeln!(&mut terminal, "[{}] {}", record.level(), record.args());
+                }
             });
         }
     }
@@ -86,11 +94,12 @@ impl Log for BootLogger {
 
 struct PostBootLogger {
     serial: Arc<Mutex<Serial>>,
+    terminal: Arc<Mutex<Terminal>>,
 }
 
 impl PostBootLogger {
-    const fn new(serial: Arc<Mutex<Serial>>) -> Self {
-        Self { serial }
+    const fn new(serial: Arc<Mutex<Serial>>, terminal: Arc<Mutex<Terminal>>) -> Self {
+        Self { serial, terminal }
     }
 }
 
@@ -105,15 +114,28 @@ impl Log for PostBootLogger {
                 .apic_processor_id;
 
             interrupts::without_interrupts(|| {
-                let mut serial = self.serial.lock();
+                {
+                    let mut serial = self.serial.lock();
 
-                _ = writeln!(
-                    &mut serial,
-                    "[CPU{}] [{}] {}",
-                    cpu_id,
-                    record.level(),
-                    record.args()
-                );
+                    _ = writeln!(
+                        &mut serial,
+                        "[CPU{}] [{}] {}",
+                        cpu_id,
+                        record.level(),
+                        record.args()
+                    );
+                }
+                {
+                    let mut terminal = self.terminal.lock();
+
+                    _ = writeln!(
+                        &mut terminal,
+                        "[CPU{}] [{}] {}",
+                        cpu_id,
+                        record.level(),
+                        record.args()
+                    );
+                }
             });
         }
     }
@@ -121,12 +143,15 @@ impl Log for PostBootLogger {
     fn flush(&self) {}
 }
 
-pub fn init_logger(serial: Arc<Mutex<Serial>>) -> Result<(), SetLoggerError> {
-    LOGGER.set_logger(BOOT_LOGGER.call_once(|| BootLogger::new(serial)));
+pub fn init_logger(
+    serial: Arc<Mutex<Serial>>,
+    terminal: Arc<Mutex<Terminal>>,
+) -> Result<(), SetLoggerError> {
+    LOGGER.set_logger(BOOT_LOGGER.call_once(|| BootLogger::new(serial, terminal)));
 
     log::set_logger(&LOGGER).map(|()| log::set_max_level(LevelFilter::Trace))
 }
 
-pub fn switch_to_post_boot_logger(serial: Arc<Mutex<Serial>>) {
-    LOGGER.set_logger(POST_BOOT_LOGGER.call_once(|| PostBootLogger::new(serial)));
+pub fn switch_to_post_boot_logger(serial: Arc<Mutex<Serial>>, terminal: Arc<Mutex<Terminal>>) {
+    LOGGER.set_logger(POST_BOOT_LOGGER.call_once(|| PostBootLogger::new(serial, terminal)));
 }

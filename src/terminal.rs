@@ -93,3 +93,11 @@ impl Terminal {
         }
     }
 }
+
+impl core::fmt::Write for Terminal {
+    fn write_str(&mut self, string: &str) -> core::fmt::Result {
+        self.print_str(string);
+
+        Ok(())
+    }
+}

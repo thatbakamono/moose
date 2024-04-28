@@ -88,7 +88,18 @@ unsafe extern "C" fn _start() -> ! {
 
     let serial = Arc::new(Mutex::new(SerialPort::COM1.open().unwrap()));
 
-    init_logger(serial.clone()).unwrap();
+    let terminal = Arc::new(Mutex::new({
+        let vga = {
+            let framebuffer_response = FRAMEBUFFER_REQUEST.get_response().unwrap();
+            let framebuffer = framebuffer_response.framebuffers().next().unwrap();
+
+            Vga::new(framebuffer)
+        };
+
+        Terminal::new(vga)
+    }));
+
+    init_logger(serial.clone(), terminal.clone()).unwrap();
 
     info!("Hello, moose!");
 
@@ -98,15 +109,6 @@ unsafe extern "C" fn _start() -> ! {
     info!("Waiting started");
     PIT.wait_seconds(1);
     info!("Waiting has ended");
-
-    let vga = {
-        let framebuffer_response = FRAMEBUFFER_REQUEST.get_response().unwrap();
-        let framebuffer = framebuffer_response.framebuffers().next().unwrap();
-
-        Vga::new(framebuffer)
-    };
-
-    let terminal = Terminal::new(vga);
 
     cpu::ProcessorControlBlock::create_pcb_for_current_processor(
         CpuId::new()
@@ -136,7 +138,7 @@ unsafe extern "C" fn _start() -> ! {
         .read()
         .setup_other_application_processors(Arc::clone(&kernel), (*pcb).local_apic.get().unwrap());
 
-    switch_to_post_boot_logger(serial);
+    switch_to_post_boot_logger(serial, terminal);
 
     (*pcb).local_apic.get().unwrap().enable_timer();
 
