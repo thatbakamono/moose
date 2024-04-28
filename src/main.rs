@@ -25,7 +25,7 @@ use limine::request::{FramebufferRequest, HhdmRequest, MemoryMapRequest, PagingM
 use limine::BaseRevision;
 use log::{error, info};
 use raw_cpuid::CpuId;
-use spin::RwLock;
+use spin::{Mutex, RwLock};
 use x86_64::registers::control::{Cr4, Cr4Flags, Efer, EferFlags};
 
 use crate::driver::acpi::Acpi;
@@ -34,7 +34,7 @@ use crate::kernel::Kernel;
 use crate::{
     logger::{init_logger, switch_to_post_boot_logger},
     memory::{FrameAllocator, MemoryManager},
-    serial::{Port, Serial},
+    serial::SerialPort,
     vga::Vga,
 };
 
@@ -63,15 +63,32 @@ unsafe extern "C" fn _start() -> ! {
     Efer::write(Efer::read() | EferFlags::NO_EXECUTE_ENABLE);
     Cr4::write(Cr4::read() | Cr4Flags::PAGE_GLOBAL | Cr4Flags::FSGSBASE);
 
-    Serial::init(Port::COM1).unwrap();
+    arch::x86::perform_arch_initialization();
 
-    init_logger().unwrap();
+    let mut memory_manager = {
+        let memory_map_response = MEMORY_MAP_REQUEST.get_response().unwrap();
+
+        let physical_memory_offset = {
+            let higher_half_direct_mapping_response =
+                HIGHER_HALF_DIRECT_MAPPING_REQUEST.get_response().unwrap();
+
+            higher_half_direct_mapping_response.offset()
+        };
+
+        let frame_allocator = FrameAllocator::new(memory_map_response);
+
+        MemoryManager::new(frame_allocator, physical_memory_offset)
+    };
+
+    init_heap(&mut memory_manager).expect("Failed to initialize heap");
+
+    let memory_manager = Arc::new(RwLock::new(memory_manager));
+
+    let serial = Arc::new(Mutex::new(SerialPort::COM1.open().unwrap()));
+
+    init_logger(serial.clone()).unwrap();
 
     info!("Hello, moose!");
-
-    Serial::writeln(Port::COM1, "Hello, moose!");
-
-    arch::x86::perform_arch_initialization();
 
     PIC.initialize();
     PIT.initialize();
@@ -80,19 +97,6 @@ unsafe extern "C" fn _start() -> ! {
     PIT.wait_seconds(1);
     info!("Waiting has ended");
 
-    let memory_map_response = MEMORY_MAP_REQUEST.get_response().unwrap();
-    let physical_memory_offset = {
-        let higher_half_direct_mapping_response =
-            HIGHER_HALF_DIRECT_MAPPING_REQUEST.get_response().unwrap();
-
-        higher_half_direct_mapping_response.offset()
-    };
-
-    let frame_allocator = FrameAllocator::new(memory_map_response);
-    let mut memory_manager = MemoryManager::new(frame_allocator, physical_memory_offset);
-    init_heap(&mut memory_manager).expect("Failed to initialize heap");
-    let memory_manager_ref = Arc::new(RwLock::new(memory_manager));
-
     cpu::ProcessorControlBlock::create_pcb_for_current_processor(
         CpuId::new()
             .get_feature_info()
@@ -100,13 +104,13 @@ unsafe extern "C" fn _start() -> ! {
             .initial_local_apic_id() as u16,
     );
 
-    let acpi = Arc::new(Acpi::with_memory_manager(Arc::clone(&memory_manager_ref)));
+    let acpi = Arc::new(Acpi::with_memory_manager(Arc::clone(&memory_manager)));
     let apic = Arc::new(RwLock::new(Apic::initialize(Arc::clone(&acpi))));
 
     let kernel = Arc::new(RwLock::new(Kernel {
         acpi,
         apic,
-        memory_manager: memory_manager_ref,
+        memory_manager,
         gdt: x86_64::instructions::tables::sgdt(),
     }));
 
@@ -121,7 +125,7 @@ unsafe extern "C" fn _start() -> ! {
         .read()
         .setup_other_application_processors(Arc::clone(&kernel), (*pcb).local_apic.get().unwrap());
 
-    switch_to_post_boot_logger();
+    switch_to_post_boot_logger(serial);
 
     (*pcb).local_apic.get().unwrap().enable_timer();
 

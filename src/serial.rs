@@ -3,21 +3,32 @@ use spin::Mutex;
 
 const COM1: u16 = 0x3f8;
 
+static COM_MUTEX: Mutex<()> = Mutex::new(());
+
+static mut IS_COM1_USED: bool = false;
+
 #[derive(Clone, Copy)]
-pub enum Port {
+pub enum SerialPort {
     COM1,
 }
 
-pub struct Serial;
+impl SerialPort {
+    pub fn open(&self) -> Result<Serial, ()> {
+        let _lock = COM_MUTEX.lock();
 
-#[allow(unused)]
-impl Serial {
-    pub fn init(port: Port) -> Result<(), ()> {
-        let port = match port {
-            Port::COM1 => COM1,
-        };
+        // SAFETY: This is safe because we synchronize all reads and writes.
+        if unsafe { IS_COM1_USED } {
+            return Err(());
+        }
+
+        // SAFETY: This is safe because we synchronize all reads and writes.
+        unsafe { IS_COM1_USED = true };
 
         // Source: https://wiki.osdev.org/Serial_Ports
+
+        let port = match *self {
+            SerialPort::COM1 => COM1,
+        };
 
         outb(port + 1, 0x00); // Disable all interrupts
 
@@ -43,54 +54,21 @@ impl Serial {
         // (not-loopback with IRQs enabled and OUT#1 and OUT#2 bits enabled)
         outb(port + 4, 0x0F);
 
-        Ok(())
+        Ok(Serial { port })
     }
+}
 
-    pub fn write(port: Port, text: &str) {
-        let port = match port {
-            Port::COM1 => COM1,
-        };
+pub struct Serial {
+    port: u16,
+}
 
-        for byte in text.bytes() {
-            while inb(port + 5) & 0x20 == 0 {}
-            outb(port, byte);
+impl core::fmt::Write for Serial {
+    fn write_str(&mut self, string: &str) -> core::fmt::Result {
+        for byte in string.bytes() {
+            while inb(self.port + 5) & 0x20 == 0 {}
+
+            outb(self.port, byte);
         }
-    }
-
-    pub fn writeln(port: Port, text: &str) {
-        let port = match port {
-            Port::COM1 => COM1,
-        };
-
-        for byte in text.bytes() {
-            while inb(port + 5) & 0x20 == 0 {}
-            outb(port, byte);
-        }
-
-        outb(port, b'\n');
-    }
-}
-
-pub struct SerialWriter {
-    port: Port,
-}
-
-impl SerialWriter {
-    pub fn new(port: Port) -> Self {
-        Self { port }
-    }
-}
-
-static mut TERMINAL_WRITABLE: Mutex<bool> = Mutex::new(true);
-
-impl core::fmt::Write for SerialWriter {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        x86_64::instructions::interrupts::without_interrupts(|| {
-            let mut lock = unsafe { TERMINAL_WRITABLE.lock() };
-            *lock = false;
-            Serial::write(self.port, s);
-            *lock = true;
-        });
 
         Ok(())
     }
