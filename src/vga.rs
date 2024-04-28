@@ -1,7 +1,7 @@
 use core::ptr;
 
-use limine::framebuffer::Framebuffer;
 use crate::font::DEFAULT_ASCII_FONT;
+use limine::framebuffer::Framebuffer;
 
 pub struct Vga {
     framebuffer: Framebuffer<'static>,
@@ -81,8 +81,8 @@ impl Vga {
 
         assert!(x < framebuffer_width);
         assert!(y < framebuffer_height);
-        assert!(x + width < framebuffer_width);
-        assert!(x + height < framebuffer_height);
+        assert!((x + width) <= framebuffer_width);
+        assert!((y + height) <= framebuffer_height);
 
         // TODO: Research whether BPP does in practice have other values than 32 and if so,
         //       lift this restriction
@@ -111,12 +111,20 @@ impl Vga {
         self.fill_rectangle(x, y, width, 1, color);
     }
 
-    pub fn draw_character(&mut self, x: u64, y: u64, scale: u64, character: char, foreground_color: Rgb, background_color: Rgb) {
+    pub fn draw_character(
+        &mut self,
+        x: u64,
+        y: u64,
+        scale: u64,
+        character: char,
+        foreground_color: Rgb,
+        background_color: Rgb,
+    ) {
         let framebuffer_width = self.framebuffer.width();
         let framebuffer_height = self.framebuffer.height();
 
-        assert!((x + 8 * scale) < framebuffer_width);
-        assert!((y + 16 * scale) < framebuffer_height);
+        assert!((x + 8 * scale) <= framebuffer_width);
+        assert!((y + 16 * scale) <= framebuffer_height);
 
         assert!(character.is_ascii_graphic());
 
@@ -126,11 +134,86 @@ impl Vga {
             for current_y in 0..16 * scale {
                 let glyph = &DEFAULT_ASCII_FONT[character as usize];
 
-                if (glyph[(current_y / scale) as usize] >> (7 - ((current_x / scale) as usize)) & 1) == 1 {
+                if (glyph[(current_y / scale) as usize] >> (7 - ((current_x / scale) as usize)) & 1)
+                    == 1
+                {
                     self.put_pixel(x + current_x, y + current_y, foreground_color);
                 }
             }
         }
+    }
+
+    pub fn copy(&mut self, from: (u64, u64), to: (u64, u64), width: u64, height: u64) {
+        let framebuffer_width = self.framebuffer.width();
+        let framebuffer_height = self.framebuffer.height();
+
+        assert!(from.0 < framebuffer_width);
+        assert!(from.1 < framebuffer_height);
+        assert!(to.0 < framebuffer_width);
+        assert!(to.1 < framebuffer_height);
+
+        if width == 0 {
+            return;
+        }
+
+        assert!(from.0 + width <= framebuffer_width);
+        assert!(to.0 + width <= framebuffer_width);
+
+        if height == 0 {
+            return;
+        }
+
+        assert!(from.1 + height <= framebuffer_height);
+        assert!(to.1 + height <= framebuffer_height);
+
+        if from == to {
+            return;
+        }
+
+        if from.0 > to.0 {
+            todo!();
+        }
+
+        if from.1 < to.1 {
+            todo!();
+        }
+
+        // TODO: Research whether BPP does in practice have other values than 32 and if so,
+        //       lift this restriction
+        assert_eq!(self.framebuffer.bpp(), 32);
+
+        let bits_per_pixel = self.framebuffer.bpp() as u64;
+        let bytes_per_pixel = bits_per_pixel / 8;
+
+        for y in 0..height {
+            for x in 0..width {
+                let source_x = x + from.0;
+                let source_y = y + from.1;
+                let destination_x = x + to.0;
+                let destination_y = y + to.1;
+
+                let source_pixel_offset =
+                    ((source_y * self.framebuffer.pitch()) + (source_x * bytes_per_pixel)) as isize;
+                let source_pixel =
+                    unsafe { self.framebuffer.addr().offset(source_pixel_offset) } as *mut u32;
+
+                let destination_pixel_offset = ((destination_y * self.framebuffer.pitch())
+                    + (destination_x * bytes_per_pixel))
+                    as isize;
+                let destination_pixel =
+                    unsafe { self.framebuffer.addr().offset(destination_pixel_offset) } as *mut u32;
+
+                unsafe { ptr::write_volatile(destination_pixel, ptr::read_volatile(source_pixel)) };
+            }
+        }
+    }
+
+    pub fn width(&self) -> u64 {
+        self.framebuffer.width()
+    }
+
+    pub fn height(&self) -> u64 {
+        self.framebuffer.height()
     }
 }
 

@@ -14,10 +14,12 @@ mod kernel;
 mod logger;
 mod memory;
 mod serial;
+mod terminal;
 mod vga;
 
 use crate::allocator::init_heap;
 use crate::driver::{pic::PIC, pit::PIT};
+use crate::terminal::Terminal;
 use alloc::sync::Arc;
 use core::arch::asm;
 use limine::paging::Mode;
@@ -97,6 +99,15 @@ unsafe extern "C" fn _start() -> ! {
     PIT.wait_seconds(1);
     info!("Waiting has ended");
 
+    let vga = {
+        let framebuffer_response = FRAMEBUFFER_REQUEST.get_response().unwrap();
+        let framebuffer = framebuffer_response.framebuffers().next().unwrap();
+
+        Vga::new(framebuffer)
+    };
+
+    let terminal = Terminal::new(vga);
+
     cpu::ProcessorControlBlock::create_pcb_for_current_processor(
         CpuId::new()
             .get_feature_info()
@@ -128,13 +139,6 @@ unsafe extern "C" fn _start() -> ! {
     switch_to_post_boot_logger(serial);
 
     (*pcb).local_apic.get().unwrap().enable_timer();
-
-    let vga = {
-        let framebuffer_response = FRAMEBUFFER_REQUEST.get_response().unwrap();
-        let framebuffer = framebuffer_response.framebuffers().next().unwrap();
-
-        Vga::new(framebuffer)
-    };
 
     loop {
         asm!("hlt");
