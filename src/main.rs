@@ -14,10 +14,12 @@ mod kernel;
 mod logger;
 mod memory;
 mod serial;
+mod terminal;
 mod vga;
 
 use crate::allocator::init_heap;
 use crate::driver::{pic::PIC, pit::PIT};
+use crate::terminal::Terminal;
 use alloc::sync::Arc;
 use core::arch::asm;
 use limine::paging::Mode;
@@ -86,7 +88,18 @@ unsafe extern "C" fn _start() -> ! {
 
     let serial = Arc::new(Mutex::new(SerialPort::COM1.open().unwrap()));
 
-    init_logger(serial.clone()).unwrap();
+    let terminal = Arc::new(Mutex::new({
+        let vga = {
+            let framebuffer_response = FRAMEBUFFER_REQUEST.get_response().unwrap();
+            let framebuffer = framebuffer_response.framebuffers().next().unwrap();
+
+            Vga::new(framebuffer)
+        };
+
+        Terminal::new(vga)
+    }));
+
+    init_logger(serial.clone(), terminal.clone()).unwrap();
 
     info!("Hello, moose!");
 
@@ -125,16 +138,9 @@ unsafe extern "C" fn _start() -> ! {
         .read()
         .setup_other_application_processors(Arc::clone(&kernel), (*pcb).local_apic.get().unwrap());
 
-    switch_to_post_boot_logger(serial);
+    switch_to_post_boot_logger(serial, terminal);
 
     (*pcb).local_apic.get().unwrap().enable_timer();
-
-    let vga = {
-        let framebuffer_response = FRAMEBUFFER_REQUEST.get_response().unwrap();
-        let framebuffer = framebuffer_response.framebuffers().next().unwrap();
-
-        Vga::new(framebuffer)
-    };
 
     loop {
         asm!("hlt");
