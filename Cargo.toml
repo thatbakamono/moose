@@ -18,6 +18,7 @@ deku = { version = "0.16.0", default-features = false, features = ["alloc", "con
 raw-cpuid = "11.0.1"
 volatile = "0.5.2"
 libm = "0.2.8"
+aml = "0.16.4"
 
 [profile.dev]
 opt-level = 1

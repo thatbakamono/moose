@@ -123,9 +123,7 @@ unsafe extern "C" fn _start() -> ! {
 
     let rsdp_response = RSDP_REQUEST.get_response().unwrap();
 
-    let acpi = Arc::new(Acpi::with_memory_manager(
-        rsdp_response.address() as *const Rsdp
-    ));
+    let acpi = Arc::new(Acpi::from_rsdp(rsdp_response.address() as *const Rsdp));
     let apic = Arc::new(RwLock::new(Apic::initialize(Arc::clone(&acpi))));
 
     let kernel = Arc::new(RwLock::new(Kernel {
