@@ -1,7 +1,7 @@
-use crate::arch::x86::asm::{inl, outb, outl};
-use alloc::format;
-use alloc::string::{String, ToString};
-use log::{debug, info};
+use crate::arch::x86::asm::{inl, outl};
+use alloc::vec;
+use alloc::vec::Vec;
+use log::debug;
 
 const CONFIG_ADDRESS: u16 = 0xCF8;
 const CONFIG_DATA: u16 = 0xCFC;
@@ -9,23 +9,30 @@ const CONFIG_DATA: u16 = 0xCFC;
 pub struct Pci {}
 
 impl Pci {
-    pub fn build_device_tree() {
+    pub fn build_device_tree() -> Vec<PciDevice> {
         Pci::perform_brute_force_scan()
     }
 
-    fn perform_brute_force_scan() {
+    fn perform_brute_force_scan() -> Vec<PciDevice> {
+        let mut devices = vec![];
+
         for bus in 0..256 {
             for device in 0..32 {
                 // @TODO: Make tree-like structure of detected
                 // devices in system (not only on PCI bus ofc, maybe use some AML and ACPI tables?)
-                Pci::scan_device(bus, device);
+                if let Some(dev) = Pci::scan_device(bus, device) {
+                    devices.push(dev);
+                }
             }
         }
+
+        devices
     }
 
     fn scan_device(bus: u32, device: u32) -> Option<PciDevice> {
         let vendor_id = Pci::read(bus, device, 0, 0);
         if vendor_id == 0xFFFF {
+            // Device does not exist
             return None;
         }
 
@@ -110,21 +117,21 @@ impl PciDevice {
 }
 
 // Feel free to add more manufacturer names
-fn get_device_manufacturer_string(device: &PciDevice) -> String {
+fn get_device_manufacturer_string(device: &PciDevice) -> &str {
     match device.vendor_id {
-        0x1234 => "QEMU emulated device".to_string(),
-        0x8086 => "Intel Corp.".to_string(),
-        vendor => format!("Unknown ({:#x?})", vendor),
+        0x1234 => "QEMU emulated device",
+        0x8086 => "Intel Corp.",
+        _ => "Unknown",
     }
 }
 
-fn get_device_name(device: &PciDevice) -> String {
+fn get_device_name(device: &PciDevice) -> &str {
     match (device.vendor_id, device.device_id) {
-        (0x1234, 0x1111) => "VGA compatible graphic card".to_string(),
-        (0x8086, 0x100e) => "82540EM Gigabit Ethernet Controller".to_string(),
-        (0x8086, 0x1237) => "440FX - 82441FX PMC [Natoma]".to_string(),
-        (0x8086, 0x7000) => "82371SB PIIX3 ISA [Natoma/Triton II]".to_string(),
-        (vendor, device) => format!("Unknown ({:#x?}:{:#x?})", vendor, device),
+        (0x1234, 0x1111) => "VGA compatible graphic card",
+        (0x8086, 0x100e) => "82540EM Gigabit Ethernet Controller",
+        (0x8086, 0x1237) => "440FX - 82441FX PMC [Natoma]",
+        (0x8086, 0x7000) => "82371SB PIIX3 ISA [Natoma/Triton II]",
+        _ => "Unknown",
     }
 }
 
@@ -314,13 +321,13 @@ impl PciDeviceClass {
 }
 
 #[derive(Debug)]
-enum PciDeviceClassUndefinedSubclass {
+pub enum PciDeviceClassUndefinedSubclass {
     NonVgaCompatibleUnclassifiedDevice,
     VgaCompatibleUnclassifiedDevice,
 }
 
 #[derive(Debug)]
-enum PciDeviceClassMassStorageControllerSubclass {
+pub enum PciDeviceClassMassStorageControllerSubclass {
     ScsiBusController,
     IdeController,
     FloppyDiskController,
@@ -333,7 +340,7 @@ enum PciDeviceClassMassStorageControllerSubclass {
 }
 
 #[derive(Debug)]
-enum PciDeviceClassNetworkControllerSubclass {
+pub enum PciDeviceClassNetworkControllerSubclass {
     EthernetController,
     TokenRingController,
     FddiController,
@@ -346,14 +353,14 @@ enum PciDeviceClassNetworkControllerSubclass {
 }
 
 #[derive(Debug)]
-enum PciDeviceClassDisplayControllerSubclass {
+pub enum PciDeviceClassDisplayControllerSubclass {
     VgaCompatibleController,
     XgaController,
     NotVgaCompatible3dController,
 }
 
 #[derive(Debug)]
-enum PciDeviceClassMultimediaControllerSubclass {
+pub enum PciDeviceClassMultimediaControllerSubclass {
     MultimediaVideoController,
     MultimediaAudioController,
     ComputerTelephonyDevice,
@@ -361,13 +368,13 @@ enum PciDeviceClassMultimediaControllerSubclass {
 }
 
 #[derive(Debug)]
-enum PciDeviceClassMemoryControllerSubclass {
+pub enum PciDeviceClassMemoryControllerSubclass {
     RamController,
     FlashController,
 }
 
 #[derive(Debug)]
-enum PciDeviceClassBridgeSubclass {
+pub enum PciDeviceClassBridgeSubclass {
     HostBridge,
     IsaBridge,
     EisaBridge,
@@ -382,7 +389,7 @@ enum PciDeviceClassBridgeSubclass {
 }
 
 #[derive(Debug)]
-enum PciDeviceClassSimpleCommunicationControllerSubclass {
+pub enum PciDeviceClassSimpleCommunicationControllerSubclass {
     SerialController,
     ParallelController,
     MultiportSerialController,
@@ -392,7 +399,7 @@ enum PciDeviceClassSimpleCommunicationControllerSubclass {
 }
 
 #[derive(Debug)]
-enum PciDeviceClassBaseSystemPeripheralSubclass {
+pub enum PciDeviceClassBaseSystemPeripheralSubclass {
     Pic,
     DmaController,
     Timer,
@@ -403,7 +410,7 @@ enum PciDeviceClassBaseSystemPeripheralSubclass {
 }
 
 #[derive(Debug)]
-enum PciDeviceClassInputDeviceControllerSubclass {
+pub enum PciDeviceClassInputDeviceControllerSubclass {
     KeyboardController,
     DigitizerPen,
     MouseController,
@@ -412,12 +419,13 @@ enum PciDeviceClassInputDeviceControllerSubclass {
 }
 
 #[derive(Debug)]
-enum PciDeviceClassDockingStationSubclass {
+pub enum PciDeviceClassDockingStationSubclass {
     Generic,
 }
 
+#[allow(nonstandard_style)]
 #[derive(Debug)]
-enum PciDeviceClassProcessorSubclass {
+pub enum PciDeviceClassProcessorSubclass {
     x386,
     x486,
     Pentium,
@@ -429,7 +437,7 @@ enum PciDeviceClassProcessorSubclass {
 }
 
 #[derive(Debug)]
-enum PciDeviceClassSerialBusControllerSubclass {
+pub enum PciDeviceClassSerialBusControllerSubclass {
     FireWireController,
     AccessBusController,
     Ssa,
@@ -443,7 +451,7 @@ enum PciDeviceClassSerialBusControllerSubclass {
 }
 
 #[derive(Debug)]
-enum PciDeviceClassWirelessControllerSubclass {
+pub enum PciDeviceClassWirelessControllerSubclass {
     IrdaCompatibleController,
     ConsumerIrController,
     RfController,
@@ -454,12 +462,12 @@ enum PciDeviceClassWirelessControllerSubclass {
 }
 
 #[derive(Debug)]
-enum PciDeviceClassIntelligentControllerSubclass {
+pub enum PciDeviceClassIntelligentControllerSubclass {
     I20,
 }
 
 #[derive(Debug)]
-enum PciDeviceClassSatelliteCommunicationControllerSubclass {
+pub enum PciDeviceClassSatelliteCommunicationControllerSubclass {
     SatelliteTvController,
     SatelliteAudioController,
     SatelliteVoiceController,
@@ -467,13 +475,13 @@ enum PciDeviceClassSatelliteCommunicationControllerSubclass {
 }
 
 #[derive(Debug)]
-enum PciDeviceClassEncryptionControllerSubclass {
+pub enum PciDeviceClassEncryptionControllerSubclass {
     NetworkAndComputingEncryptionOrDecryption,
     EntertainmentEncryptionOrDecryption,
 }
 
 #[derive(Debug)]
-enum PciDeviceClassSignalProcessingControllerSubclass {
+pub enum PciDeviceClassSignalProcessingControllerSubclass {
     DpioModules,
     PerformanceCounters,
     CommunicationSynchronizer,
