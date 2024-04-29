@@ -32,6 +32,7 @@ use x86_64::registers::control::{Cr4, Cr4Flags, Efer, EferFlags};
 
 use crate::driver::acpi::Acpi;
 use crate::driver::apic::{Apic, LocalApic};
+use crate::driver::pci::Pci;
 use crate::kernel::Kernel;
 use crate::{
     logger::{init_logger, switch_to_post_boot_logger},
@@ -126,6 +127,8 @@ unsafe extern "C" fn _start() -> ! {
         memory_manager,
         gdt: x86_64::instructions::tables::sgdt(),
     }));
+
+    Pci::build_device_tree();
 
     let bsp_lapic = LocalApic::initialize_for_current_processor(Arc::clone(&kernel));
     let pcb = cpu::ProcessorControlBlock::get_pcb_for_current_processor();
