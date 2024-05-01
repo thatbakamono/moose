@@ -35,8 +35,144 @@ impl MemoryManager {
         self.map_inner(page, frame, page_flags)
     }
 
+    pub unsafe fn map_temporary(
+        &mut self,
+        page: &Page,
+        frame: &Frame,
+        page_flags: PageFlags,
+        f: impl FnOnce(),
+    ) -> Result<(), MemoryError> {
+        self.map(page, frame, page_flags)?;
+
+        f();
+
+        self.unmap(page)
+    }
+
+    pub unsafe fn map_identity(
+        &mut self,
+        page: &Page,
+        page_flags: PageFlags,
+    ) -> Result<(), MemoryError> {
+        self.map(
+            page,
+            &Frame::new(PhysicalAddress::new(page.address().as_u64())),
+            page_flags,
+        )
+    }
+
+    pub unsafe fn map_identity_temporary(
+        &mut self,
+        page: &Page,
+        page_flags: PageFlags,
+        f: impl FnOnce(),
+    ) -> Result<(), MemoryError> {
+        self.map_identity(page, page_flags)?;
+
+        f();
+
+        self.unmap(page)
+    }
+
+    pub unsafe fn map_any(&mut self, frame: &Frame, page_flags: PageFlags) -> Page {
+        self.map_any_inner(frame, page_flags)
+    }
+
+    pub unsafe fn map_any_temporary(
+        &mut self,
+        frame: &Frame,
+        page_flags: PageFlags,
+        f: impl FnOnce(Page),
+    ) -> Result<(), MemoryError> {
+        let page = self.map_any(frame, page_flags);
+
+        f(page);
+
+        self.unmap(&page)
+    }
+
     pub unsafe fn unmap(&self, page: &Page) -> Result<(), MemoryError> {
         self.unmap_inner(page)
+    }
+
+    pub fn translate_virtual_address_to_physical(
+        &self,
+        address: VirtualAddress,
+    ) -> Option<PhysicalAddress> {
+        // | 63 | ... | 49 | 48 | ... | 40 | 39 | ... | 31 | 30 | ... | 22 | 21 | ... | 12 | 11 | ... | 0 |
+        // | Unused        | Page level 4  | Page level 3  | Page level 2  | Page level 1  | 4 KiB offset |
+        let offset = address.as_u64() & 0b1111_1111_1111;
+        let level_1_page_table_entry_index = ((address.as_u64() >> 12) & 0b1_1111_1111) as usize;
+        let level_2_page_table_entry_index = ((address.as_u64() >> 21) & 0b1_1111_1111) as usize;
+        let level_3_page_table_entry_index = ((address.as_u64() >> 30) & 0b1_1111_1111) as usize;
+        let level_4_page_table_entry_index = ((address.as_u64() >> 39) & 0b1_1111_1111) as usize;
+
+        let level_4_page_table = unsafe { current_page_table(self.physical_memory_offset) };
+        let level_4_page_table_entry =
+            &mut unsafe { &mut *level_4_page_table }[level_4_page_table_entry_index];
+
+        if !level_4_page_table_entry
+            .flags()
+            .contains(PageTableFlags::PRESENT)
+        {
+            return None;
+        }
+
+        // Addresses in page table entries are all physical,
+        // otherwise they'd need to get translated as well and that would not only be terribly slow
+        // but could also lead to infinite recursion of translations.
+        // As we can't access physical memory directly when we are in long mode,
+        // we need to translate them manually to virtual addresses.
+        // We can do that easily because of the way limine mapped them for us - using higher half direct mapping.
+        // Which means we only need to add/subtract the offset we got from limine to convert addresses
+        // from physical to virtual and vice versa.
+        let level_3_page_table: *mut PageTable = VirtualAddress(
+            level_4_page_table_entry.address().as_u64() + self.physical_memory_offset,
+        )
+        .as_mut_ptr();
+        let level_3_page_table_entry =
+            &mut unsafe { &mut *level_3_page_table }[level_3_page_table_entry_index];
+
+        if !level_3_page_table_entry
+            .flags()
+            .contains(PageTableFlags::PRESENT)
+        {
+            return None;
+        }
+
+        // Same as `level_3_page_table`
+        let level_2_page_table: *mut PageTable = VirtualAddress(
+            level_3_page_table_entry.address().as_u64() + self.physical_memory_offset,
+        )
+        .as_mut_ptr();
+        let level_2_page_table_entry =
+            &mut unsafe { &mut *level_2_page_table }[level_2_page_table_entry_index];
+
+        if !level_2_page_table_entry
+            .flags()
+            .contains(PageTableFlags::PRESENT)
+        {
+            return None;
+        }
+
+        // Same as `level_3_page_table`
+        let level_1_page_table: *mut PageTable = VirtualAddress(
+            level_2_page_table_entry.address().as_u64() + self.physical_memory_offset,
+        )
+        .as_mut_ptr();
+        let level_1_page_table_entry =
+            &mut unsafe { &mut *level_1_page_table }[level_1_page_table_entry_index];
+
+        if !level_1_page_table_entry
+            .flags()
+            .contains(PageTableFlags::PRESENT)
+        {
+            return None;
+        }
+
+        Some(PhysicalAddress(
+            level_1_page_table_entry.address().as_u64() + offset,
+        ))
     }
 
     fn map_inner(
@@ -161,6 +297,133 @@ impl MemoryManager {
         tlb::flush_all();
 
         Ok(())
+    }
+
+    fn map_any_inner(&mut self, frame: &Frame, page_flags: PageFlags) -> Page {
+        let level_4_page_table = unsafe { current_page_table(self.physical_memory_offset) };
+
+        for level_4_page_table_entry_index in 0..512 {
+            let level_4_page_table_entry =
+                &mut unsafe { &mut *level_4_page_table }[level_4_page_table_entry_index];
+
+            if !level_4_page_table_entry
+                .flags()
+                .contains(PageTableFlags::PRESENT)
+            {
+                self.allocate_lower_level_page_table(level_4_page_table_entry)
+                    .expect("Failed to allocate L3 page table");
+            }
+
+            // Addresses in page table entries are all physical,
+            // otherwise they'd need to get translated as well and that would not only be terribly slow
+            // but could also lead to infinite recursion of translations.
+            // As we can't access physical memory directly when we are in long mode,
+            // we need to translate them manually to virtual addresses.
+            // We can do that easily because of the way limine mapped them for us - using higher half direct mapping.
+            // Which means we only need to add/subtract the offset we got from limine to convert addresses
+            // from physical to virtual and vice versa.
+            let level_3_page_table: *mut PageTable = VirtualAddress(
+                level_4_page_table_entry.address().as_u64() + self.physical_memory_offset,
+            )
+            .as_mut_ptr();
+
+            for level_3_page_table_entry_index in 0..512 {
+                let level_3_page_table_entry =
+                    &mut unsafe { &mut *level_3_page_table }[level_3_page_table_entry_index];
+
+                if !level_3_page_table_entry
+                    .flags()
+                    .contains(PageTableFlags::PRESENT)
+                {
+                    self.allocate_lower_level_page_table(level_3_page_table_entry)
+                        .expect("Failed to allocate L2 page table");
+                }
+
+                // Same as `level_3_page_table`
+                let level_2_page_table: *mut PageTable = VirtualAddress(
+                    level_3_page_table_entry.address().as_u64() + self.physical_memory_offset,
+                )
+                .as_mut_ptr();
+
+                for level_2_page_table_entry_index in 0..512 {
+                    let level_2_page_table_entry =
+                        &mut unsafe { &mut *level_2_page_table }[level_2_page_table_entry_index];
+
+                    if !level_2_page_table_entry
+                        .flags()
+                        .contains(PageTableFlags::PRESENT)
+                    {
+                        self.allocate_lower_level_page_table(level_2_page_table_entry)
+                            .expect("Failed to allocate L1 page table");
+                    }
+
+                    // Same as `level_3_page_table`
+                    let level_1_page_table: *mut PageTable = VirtualAddress(
+                        level_2_page_table_entry.address().as_u64() + self.physical_memory_offset,
+                    )
+                    .as_mut_ptr();
+
+                    for level_1_page_table_entry_index in 0..512 {
+                        let level_1_page_table_entry = &mut unsafe { &mut *level_1_page_table }
+                            [level_1_page_table_entry_index];
+
+                        if level_1_page_table_entry
+                            .flags()
+                            .contains(PageTableFlags::PRESENT)
+                        {
+                            continue;
+                        }
+
+                        level_1_page_table_entry.set_address(frame.address());
+                        level_1_page_table_entry.set_flags(PageTableFlags::PRESENT);
+
+                        self.assign_propagable_page_flags_to_page_table_entry(
+                            level_4_page_table_entry,
+                            page_flags,
+                        );
+                        self.assign_propagable_page_flags_to_page_table_entry(
+                            level_3_page_table_entry,
+                            page_flags,
+                        );
+                        self.assign_propagable_page_flags_to_page_table_entry(
+                            level_2_page_table_entry,
+                            page_flags,
+                        );
+                        self.assign_propagable_page_flags_to_page_table_entry(
+                            level_1_page_table_entry,
+                            page_flags,
+                        );
+
+                        if !page_flags.contains(PageFlags::EXECUTABLE) {
+                            level_1_page_table_entry.set_flags(
+                                level_1_page_table_entry.flags() | PageTableFlags::NO_EXECUTE,
+                            );
+                        }
+
+                        if page_flags.contains(PageFlags::WRITE_THROUGH) {
+                            level_1_page_table_entry.set_flags(
+                                level_1_page_table_entry.flags() | PageTableFlags::WRITE_THROUGH,
+                            );
+                        }
+
+                        if page_flags.contains(PageFlags::DISABLE_CACHING) {
+                            level_1_page_table_entry.set_flags(
+                                level_1_page_table_entry.flags() | PageTableFlags::NO_CACHE,
+                            );
+                        }
+
+                        let address = ((level_4_page_table_entry_index as u64) << 39)
+                            | ((level_3_page_table_entry_index as u64) << 30)
+                            | ((level_2_page_table_entry_index as u64) << 21)
+                            | ((level_1_page_table_entry_index as u64) << 12);
+
+                        return Page::new(VirtualAddress::new(address));
+                    }
+                }
+            }
+        }
+
+        panic!("The entire page table is occupied");
     }
 
     fn unmap_inner(&self, page: &Page) -> Result<(), MemoryError> {
@@ -410,6 +673,8 @@ bitflags! {
     }
 }
 
+#[derive(Clone, Copy)]
+#[repr(transparent)]
 pub struct Page {
     address: VirtualAddress,
 }
@@ -427,6 +692,8 @@ impl Page {
     }
 }
 
+#[derive(Clone, Copy)]
+#[repr(transparent)]
 pub struct Frame {
     address: PhysicalAddress,
 }
@@ -444,7 +711,7 @@ impl Frame {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
 pub struct VirtualAddress(u64);
 
@@ -473,7 +740,7 @@ impl VirtualAddress {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
 pub struct PhysicalAddress(u64);
 
