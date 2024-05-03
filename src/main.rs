@@ -20,19 +20,25 @@ mod vga;
 use crate::allocator::init_heap;
 use crate::driver::{pic::PIC, pit::PIT};
 use crate::terminal::Terminal;
+use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::arch::asm;
+use core::cmp::PartialEq;
+use limine::memory_map::EntryType;
 use limine::paging::Mode;
 use limine::request::{FramebufferRequest, HhdmRequest, MemoryMapRequest, PagingModeRequest};
 use limine::BaseRevision;
-use log::{error, info};
+use log::{debug, error, info};
+use pretty_hex::pretty_hex;
 use raw_cpuid::CpuId;
 use spin::{Mutex, RwLock};
 use x86_64::registers::control::{Cr4, Cr4Flags, Efer, EferFlags};
 
 use crate::driver::acpi::Acpi;
 use crate::driver::apic::{Apic, LocalApic};
-use crate::driver::pci::Pci;
+use crate::driver::ata::Ata;
+use crate::driver::pci::PciDeviceClassMassStorageControllerSubclass::IdeController;
+use crate::driver::pci::{Pci, PciDeviceClass};
 use crate::kernel::Kernel;
 use crate::{
     logger::{init_logger, switch_to_post_boot_logger},
@@ -118,6 +124,8 @@ unsafe extern "C" fn _start() -> ! {
             .initial_local_apic_id() as u16,
     );
 
+    // Comment this out because ACPI will be refactored in next PR anyway
+    /*
     let acpi = Arc::new(Acpi::with_memory_manager(Arc::clone(&memory_manager)));
     let apic = Arc::new(RwLock::new(Apic::initialize(Arc::clone(&acpi))));
 
@@ -127,9 +135,23 @@ unsafe extern "C" fn _start() -> ! {
         memory_manager,
         gdt: x86_64::instructions::tables::sgdt(),
     }));
+    */
 
-    Pci::build_device_tree();
+    let pci_devices = Pci::build_device_tree();
+    let ata = pci_devices
+        .into_iter()
+        .filter(|dev| dev.class == PciDeviceClass::MassStorageController(IdeController))
+        .for_each(|device| {
+            let mut ata = Ata::new(Arc::new(Mutex::new(device)), memory_manager.clone());
 
+            let sector = ata[0].read_sectors(10_374, 4);
+
+            for i in 0..sector.len() {
+                debug!("{}:\n{}", i, pretty_hex(&sector[i].as_slice()));
+            }
+        });
+
+    /*
     let bsp_lapic = LocalApic::initialize_for_current_processor(Arc::clone(&kernel));
     let pcb = cpu::ProcessorControlBlock::get_pcb_for_current_processor();
 
@@ -144,7 +166,7 @@ unsafe extern "C" fn _start() -> ! {
     switch_to_post_boot_logger(serial, terminal);
 
     (*pcb).local_apic.get().unwrap().enable_timer();
-
+    */
     loop {
         asm!("hlt");
     }
