@@ -105,8 +105,8 @@ impl AtaDrive {
     pub fn read_sector(&self, starting_sector_lba: u32) -> Vec<Sector> {
         self.read_sectors(starting_sector_lba, 1)
     }
+
     pub fn read_sectors(&self, mut starting_sector_lba: u32, n: u32) -> Vec<Sector> {
-        debug!("{}", self.size_in_sectors);
         assert!(starting_sector_lba < self.size_in_sectors);
         assert!(starting_sector_lba + n < self.size_in_sectors);
 
