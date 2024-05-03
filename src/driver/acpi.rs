@@ -1,5 +1,5 @@
 use crate::memory::{
-    Frame, MemoryError, MemoryManager, Page, PageFlags, PhysicalAddress, VirtualAddress, PAGE_SIZE,
+    Frame, MemoryError, MemoryManager, Page, PageFlags, PhysicalAddress, VirtualAddress,
 };
 use alloc::sync::Arc;
 use alloc::{format, vec, vec::Vec};
