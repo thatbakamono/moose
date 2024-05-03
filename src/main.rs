@@ -5,17 +5,17 @@
 
 extern crate alloc;
 
-mod allocator;
-mod arch;
-mod cpu;
-mod driver;
-mod font;
-mod kernel;
-mod logger;
-mod memory;
-mod serial;
-mod terminal;
-mod vga;
+pub mod allocator;
+pub mod arch;
+pub mod cpu;
+pub mod driver;
+pub mod font;
+pub mod kernel;
+pub mod logger;
+pub mod memory;
+pub mod serial;
+pub mod terminal;
+pub mod vga;
 
 use crate::allocator::init_heap;
 use crate::driver::{pic::PIC, pit::PIT};

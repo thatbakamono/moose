@@ -103,7 +103,7 @@ impl AtaDrive {
         self.read_sectors(starting_sector_lba, 1)
     }
 
-    pub fn read_sectors(&self, mut starting_sector_lba: u32, n: u32) -> Vec<Sector> {
+    pub fn read_sectors(&self, starting_sector_lba: u32, n: u32) -> Vec<Sector> {
         assert!(starting_sector_lba < self.size_in_sectors);
         assert!(starting_sector_lba + n < self.size_in_sectors);
 
@@ -320,11 +320,7 @@ impl AtaDrive {
     }
 }
 
-pub struct Ata {
-    pci_device: Arc<PciDevice>,
-    memory_manager: Arc<RwLock<MemoryManager>>,
-    identity_response: [u8; 512],
-}
+pub struct Ata {}
 
 impl Ata {
     pub fn new(
