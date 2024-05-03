@@ -1,5 +1,5 @@
 use crate::memory::{
-    Frame, MemoryError, MemoryManager, Page, PageFlags, PhysicalAddress, VirtualAddress, PAGE_SIZE,
+    Frame, MemoryError, MemoryManager, Page, PageFlags, PhysicalAddress, VirtualAddress,
 };
 use alloc::sync::Arc;
 use alloc::{format, vec, vec::Vec};
@@ -93,45 +93,11 @@ pub struct Acpi {
 }
 
 impl Acpi {
-    pub fn with_memory_manager(memory_manager: Arc<RwLock<MemoryManager>>) -> Acpi {
-        // Map BIOS extended area memory
-        for page in
-            (BIOS_EXTENDED_AREA_MEMORY_START..BIOS_EXTENDED_AREA_MEMORY_END).step_by(PAGE_SIZE)
-        {
-            unsafe {
-                memory_manager
-                    .write()
-                    .map(
-                        &Page::new(VirtualAddress::new(page)),
-                        &Frame::new(PhysicalAddress::new(page)),
-                        PageFlags::empty(),
-                    )
-                    .unwrap()
-            }
-        }
-
-        let extended_area = unsafe {
-            slice::from_raw_parts(
-                BIOS_EXTENDED_AREA_MEMORY_START as *mut u8,
-                (BIOS_EXTENDED_AREA_MEMORY_END - BIOS_EXTENDED_AREA_MEMORY_START) as usize,
-            )
-        };
-        let rsdp = extended_area
-            .windows(mem::size_of::<Rsdp>())
-            .step_by(16)
-            .find_map(|possible_rsdp_slice| {
-                let rsdp_pointer = possible_rsdp_slice.as_ptr().cast::<Rsdp>();
-                let rsdp = unsafe { &*rsdp_pointer };
-
-                if rsdp.signature == RSDP_SIGNATURE {
-                    return Some(rsdp);
-                }
-
-                None
-            })
-            .expect("RSDP table not found");
-
-        let rsdt_address = rsdp.rsdt_address as u64;
+    pub fn with_memory_manager(
+        memory_manager: Arc<RwLock<MemoryManager>>,
+        rsdp: *const Rsdp,
+    ) -> Acpi {
+        let rsdt_address = unsafe { &*rsdp }.rsdt_address as u64;
 
         unsafe {
             memory_manager.write().map(
@@ -144,7 +110,7 @@ impl Acpi {
 
         let mut acpi = Self {
             memory_manager,
-            rsdp: *rsdp,
+            rsdp: unsafe { *rsdp },
             madt: Arc::new(Madt::default()),
         };
 
