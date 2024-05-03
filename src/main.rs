@@ -23,14 +23,16 @@ use crate::terminal::Terminal;
 use alloc::sync::Arc;
 use core::arch::asm;
 use limine::paging::Mode;
-use limine::request::{FramebufferRequest, HhdmRequest, MemoryMapRequest, PagingModeRequest};
+use limine::request::{
+    FramebufferRequest, HhdmRequest, MemoryMapRequest, PagingModeRequest, RsdpRequest,
+};
 use limine::BaseRevision;
 use log::{error, info};
 use raw_cpuid::CpuId;
 use spin::{Mutex, RwLock};
 use x86_64::registers::control::{Cr4, Cr4Flags, Efer, EferFlags};
 
-use crate::driver::acpi::Acpi;
+use crate::driver::acpi::{Acpi, Rsdp};
 use crate::driver::apic::{Apic, LocalApic};
 use crate::driver::pci::Pci;
 use crate::kernel::Kernel;
@@ -58,6 +60,9 @@ static HIGHER_HALF_DIRECT_MAPPING_REQUEST: HhdmRequest = HhdmRequest::new();
 
 #[used]
 static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
+
+#[used]
+static RSDP_REQUEST: RsdpRequest = RsdpRequest::new();
 
 #[no_mangle]
 unsafe extern "C" fn _start() -> ! {
@@ -118,7 +123,12 @@ unsafe extern "C" fn _start() -> ! {
             .initial_local_apic_id() as u16,
     );
 
-    let acpi = Arc::new(Acpi::with_memory_manager(Arc::clone(&memory_manager)));
+    let rsdp_response = RSDP_REQUEST.get_response().unwrap();
+
+    let acpi = Arc::new(Acpi::with_memory_manager(
+        Arc::clone(&memory_manager),
+        rsdp_response.address() as *const Rsdp,
+    ));
     let apic = Arc::new(RwLock::new(Apic::initialize(Arc::clone(&acpi))));
 
     let kernel = Arc::new(RwLock::new(Kernel {
