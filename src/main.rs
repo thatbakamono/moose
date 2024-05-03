@@ -20,11 +20,8 @@ mod vga;
 use crate::allocator::init_heap;
 use crate::driver::{pic::PIC, pit::PIT};
 use crate::terminal::Terminal;
-use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::arch::asm;
-use core::cmp::PartialEq;
-use limine::memory_map::EntryType;
 use limine::paging::Mode;
 use limine::request::{FramebufferRequest, HhdmRequest, MemoryMapRequest, PagingModeRequest};
 use limine::BaseRevision;
@@ -138,11 +135,11 @@ unsafe extern "C" fn _start() -> ! {
     */
 
     let pci_devices = Pci::build_device_tree();
-    let ata = pci_devices
+    let _ata = pci_devices
         .into_iter()
         .filter(|dev| dev.class == PciDeviceClass::MassStorageController(IdeController))
         .for_each(|device| {
-            let mut ata = Ata::new(Arc::new(Mutex::new(device)), memory_manager.clone());
+            let ata = Ata::new(Arc::new(Mutex::new(device)), memory_manager.clone());
 
             let sector = ata[0].read_sectors(10_374, 4);
 

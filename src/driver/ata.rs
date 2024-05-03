@@ -1,19 +1,16 @@
 use crate::arch::x86::asm::{inb, inw, outb, outl};
 use crate::driver::pci::PciDevice;
-use crate::driver::pic::PIC;
-use crate::driver::pit::PIT;
-use crate::memory::{Frame, MemoryManager, Page, PageFlags, PhysicalAddress, VirtualAddress};
+use crate::memory::{MemoryManager, VirtualAddress};
 use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use core::mem::transmute;
 use deku::bitvec::{BitSlice, Msb0};
-use deku::{DekuError, DekuRead, DekuWrite};
+use deku::{DekuError, DekuRead};
 use log::debug;
-use pretty_hex::pretty_hex;
 use spin::{Mutex, RwLock};
 
 const ATA_PRIMARY_IO_PORT: u16 = 0x1F0;
@@ -385,9 +382,6 @@ impl Ata {
             _ => unreachable!(),
         };
 
-        // This performs reset on all drives connected to the bus
-        Self::perform_soft_reset(io_base);
-
         // Select disk
         outb(
             io_base + ATA_REG_HDDEVSEL,
@@ -410,7 +404,7 @@ impl Ata {
         // Check if drive exists
         if inb(io_base + ATA_REG_STATUS) == 0 {
             debug!("Disk offline");
-            //return None
+            return None
         }
 
         // Poll until BSY bit clears
@@ -429,11 +423,11 @@ impl Ata {
         // We don't support disks without DMA or LBA addressing (LBA can be easily converted to CHS,
         // but reading using PIO mode is so slow)
         if parsed_identify_response.capabilities & ATA_CAPABILITY_DMA_LBA != 0 {
-            // return None;
+            return None;
         }
 
         // Enable Bus Mastering for IDE Controller (Bus Mastering is DMA for PCI)
-        //pci_device.lock().enable_dma();
+        pci_device.lock().enable_dma();
 
         debug!("Disk online, info: {:#?}", parsed_identify_response);
 
@@ -471,8 +465,8 @@ impl AtaIdentityResponse {
         // ATA reports model number in some cringe format with swapped bytes, so we need to
         // "unswap" it to make it a "real" string
         for i in 0..20 {
-            let mut higher_byte;
-            let mut lower_byte;
+            let higher_byte;
+            let lower_byte;
 
             (remaining_slice, higher_byte) = u8::read(remaining_slice, ())?;
             (remaining_slice, lower_byte) = u8::read(remaining_slice, ())?;

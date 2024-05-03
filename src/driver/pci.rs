@@ -1,5 +1,4 @@
-use crate::arch::x86::asm::{inl, outl, outw};
-use alloc::sync::Arc;
+use crate::arch::x86::asm::{inl, outl};
 use alloc::vec;
 use alloc::vec::Vec;
 use log::debug;
