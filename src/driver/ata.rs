@@ -11,7 +11,9 @@ use core::mem::transmute;
 use deku::bitvec::{BitSlice, Msb0};
 use deku::{DekuError, DekuRead};
 use log::debug;
+use pretty_hex::pretty_hex;
 use spin::{Mutex, RwLock};
+use crate::driver::pit::PIT;
 
 const ATA_PRIMARY_IO_PORT: u16 = 0x1F0;
 const ATA_SECONDARY_IO_PORT: u16 = 0x170;
@@ -104,6 +106,26 @@ impl AtaDrive {
     }
 
     pub fn read_sectors(&self, starting_sector_lba: u32, n: u32) -> Vec<Sector> {
+/*
+        outb(0x1F6, 0xF0);
+        outb(0x1F2, 1);
+        outb(0x1F3, 0);
+        outb(0x1F4, 0);
+        outb(0x1F5, 0);
+        outb(0x1F7, 0x20);
+        // Poll until BSY bit clears
+        while (inb(0x1F0 + ATA_REG_STATUS) & ATA_SR_BSY) != 0 {}
+
+        // Read IDENTITY command response (it's not possible using DMA so need to use PIO mode)
+        let mut identify_response = [0u16; (ATA_SECTOR_SIZE / 2) as usize];
+        for i in 0..(ATA_SECTOR_SIZE / 2) as usize {
+            identify_response[i] = inw(0x1F0 + ATA_REG_DATA);
+        }
+        let v: [u8; 512] = unsafe { transmute(identify_response) };
+        debug!("Info: {}", pretty_hex(&v));
+*/
+
+
         assert!(starting_sector_lba < self.size_in_sectors);
         assert!(starting_sector_lba + n < self.size_in_sectors);
 
@@ -205,6 +227,14 @@ impl AtaDrive {
                 break;
             }
         }
+        unsafe { PIT.wait_seconds(1) }
+
+        debug!(
+            "BMR Status: {} Dev_status: {} Dev_error: {}",
+            inb(bmr_status_register),
+            inb(self.get_io_base() + ATA_REG_STATUS),
+            inb(self.get_io_base() + ATA_REG_ERROR)
+        );
 
         buffer
     }
@@ -400,7 +430,7 @@ impl Ata {
         // Check if drive exists
         if inb(io_base + ATA_REG_STATUS) == 0 {
             debug!("Disk offline");
-            return None
+            //return None
         }
 
         // Poll until BSY bit clears
@@ -418,7 +448,7 @@ impl Ata {
 
         // We don't support disks without DMA or LBA addressing (LBA can be easily converted to CHS,
         // but reading using PIO mode is so slow)
-        if parsed_identify_response.capabilities & ATA_CAPABILITY_DMA_LBA != 0 {
+        if parsed_identify_response.capabilities & ATA_CAPABILITY_DMA_LBA == 0 {
             return None;
         }
 

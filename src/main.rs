@@ -129,7 +129,7 @@ unsafe extern "C" fn _start() -> ! {
     let kernel = Arc::new(RwLock::new(Kernel {
         acpi,
         apic,
-        memory_manager,
+        memory_manager: memory_manager.clone(),
         gdt: x86_64::instructions::tables::sgdt(),
     }));
     */
@@ -141,7 +141,7 @@ unsafe extern "C" fn _start() -> ! {
         .for_each(|device| {
             let ata = Ata::new(Arc::new(Mutex::new(device)), memory_manager.clone());
 
-            let sector = ata[0].read_sectors(10_374, 4);
+            let sector = ata[1].read_sectors(0, 4);
 
             for i in 0..sector.len() {
                 debug!("{}:\n{}", i, pretty_hex(&sector[i].as_slice()));
