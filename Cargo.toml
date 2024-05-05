@@ -19,8 +19,12 @@ raw-cpuid = "11.0.1"
 volatile = "0.5.2"
 
 [profile.dev]
+opt-level = 1
 panic = "abort"
 
 [profile.release]
 debug = true
 panic = "abort"
+
+[profile.dev.package."*"]
+opt-level = 3
