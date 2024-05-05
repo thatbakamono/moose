@@ -3,7 +3,7 @@ use crate::memory::{
 };
 use alloc::sync::Arc;
 use alloc::{format, vec, vec::Vec};
-use core::{mem, slice};
+use core::{mem, ptr, slice};
 use deku::bitvec::{BitSlice, Msb0};
 use deku::{DekuEnumExt, DekuError, DekuRead};
 use log::info;
@@ -66,10 +66,26 @@ pub struct Rsdp {
     oem_id: [u8; 6],
     revision: u8,
     rsdt_address: u32,
-    length: u32,
-    xsdt_address: u64,
-    ext_checksum: u8,
-    reserved: [u8; 3],
+}
+
+impl Rsdp {
+    fn verify_checksum(&self) -> bool {
+        self.calculate_checksum() & 0xFF == 0
+    }
+
+    fn calculate_checksum(&self) -> u64 {
+        let size = mem::size_of::<Self>();
+
+        let mut checksum = 0;
+
+        let pointer = (self) as *const _ as *const u8;
+
+        for i in 0..size {
+            checksum += unsafe { ptr::read_volatile(pointer.add(i)) } as u64;
+        }
+
+        checksum
+    }
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -97,16 +113,24 @@ impl Acpi {
         memory_manager: Arc<RwLock<MemoryManager>>,
         rsdp: *const Rsdp,
     ) -> Acpi {
-        let rsdt_address = unsafe { &*rsdp }.rsdt_address as u64;
+        assert!(!rsdp.is_null());
 
-        unsafe {
-            memory_manager.write().map(
-                &Page::new(VirtualAddress::new(rsdt_address & 0xFFFF_FFFF_F000)),
-                &Frame::new(PhysicalAddress::new(rsdt_address & 0xFFFF_FFFF_F000)),
-                PageFlags::empty(),
-            )
+        assert!(unsafe { &*rsdp }.verify_checksum(), "Invalid RSDP");
+
+        {
+            let rsdt_address = unsafe { &*rsdp }.rsdt_address as u64;
+
+            assert!(rsdt_address != 0, "RSDP must contain valid address to RSDT");
+
+            unsafe {
+                memory_manager.write().map(
+                    &Page::new(VirtualAddress::new(rsdt_address & 0xFFFF_FFFF_F000)),
+                    &Frame::new(PhysicalAddress::new(rsdt_address & 0xFFFF_FFFF_F000)),
+                    PageFlags::empty(),
+                )
+            }
+            .expect("Cannot map RSDT");
         }
-        .expect("Cannot map RSDT");
 
         let mut acpi = Self {
             memory_manager,
@@ -134,7 +158,9 @@ impl Acpi {
             let address_to_pointer_to_another_table = (self.rsdp.rsdt_address
                 + (mem::size_of::<SdtHeader>() as u32)
                 + (entry * 4)) as *const u32;
-            let pointer_to_entry_header = unsafe { *address_to_pointer_to_another_table };
+
+            let pointer_to_entry_header =
+                unsafe { ptr::read_unaligned(address_to_pointer_to_another_table) };
 
             // Map table into memory
             unsafe {
