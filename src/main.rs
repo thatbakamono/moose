@@ -126,7 +126,6 @@ unsafe extern "C" fn _start() -> ! {
             .initial_local_apic_id() as u16,
     );
 
-    let acpi = Arc::new(Acpi::with_memory_manager(Arc::clone(&memory_manager)));
     let rsdp_response = RSDP_REQUEST.get_response().unwrap();
 
     let acpi = Arc::new(Acpi::with_memory_manager(
