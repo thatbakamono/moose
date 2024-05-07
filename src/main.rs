@@ -148,7 +148,6 @@ unsafe extern "C" fn _start() -> ! {
             }
         });
 
-    /*
     let bsp_lapic = LocalApic::initialize_for_current_processor(Arc::clone(&kernel));
     let pcb = cpu::ProcessorControlBlock::get_pcb_for_current_processor();
 
@@ -163,7 +162,7 @@ unsafe extern "C" fn _start() -> ! {
     switch_to_post_boot_logger(serial, terminal);
 
     (*pcb).local_apic.get().unwrap().enable_timer();
-    */
+
     loop {
         asm!("hlt");
     }

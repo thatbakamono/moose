@@ -106,26 +106,6 @@ impl AtaDrive {
     }
 
     pub fn read_sectors(&self, starting_sector_lba: u32, n: u32) -> Vec<Sector> {
-/*
-        outb(0x1F6, 0xF0);
-        outb(0x1F2, 1);
-        outb(0x1F3, 0);
-        outb(0x1F4, 0);
-        outb(0x1F5, 0);
-        outb(0x1F7, 0x20);
-        // Poll until BSY bit clears
-        while (inb(0x1F0 + ATA_REG_STATUS) & ATA_SR_BSY) != 0 {}
-
-        // Read IDENTITY command response (it's not possible using DMA so need to use PIO mode)
-        let mut identify_response = [0u16; (ATA_SECTOR_SIZE / 2) as usize];
-        for i in 0..(ATA_SECTOR_SIZE / 2) as usize {
-            identify_response[i] = inw(0x1F0 + ATA_REG_DATA);
-        }
-        let v: [u8; 512] = unsafe { transmute(identify_response) };
-        debug!("Info: {}", pretty_hex(&v));
-*/
-
-
         assert!(starting_sector_lba < self.size_in_sectors);
         assert!(starting_sector_lba + n < self.size_in_sectors);
 
@@ -185,6 +165,7 @@ impl AtaDrive {
         outb(bmr_command_register, 0);
 
         // Clear interrupt and error bits in status register
+        // This is weird register, because we clear bits by issuing write with these bits set.
         outb(bmr_status_register, inb(bmr_status_register) | 0x2 | 0x4);
 
         // Set PRDT entry
@@ -227,14 +208,6 @@ impl AtaDrive {
                 break;
             }
         }
-        unsafe { PIT.wait_seconds(1) }
-
-        debug!(
-            "BMR Status: {} Dev_status: {} Dev_error: {}",
-            inb(bmr_status_register),
-            inb(self.get_io_base() + ATA_REG_STATUS),
-            inb(self.get_io_base() + ATA_REG_ERROR)
-        );
 
         buffer
     }
@@ -474,7 +447,7 @@ struct AtaIdentityResponse {
         pad_bytes_before = "52",
         reader = "AtaIdentityResponse::read_model_number(deku::rest)"
     )]
-    model_number: String,
+    _model_number: String,
     #[deku(pad_bytes_before = "6")]
     capabilities: u16,
     #[deku(pad_bytes_before = "14", pad_bytes_after = "394")]

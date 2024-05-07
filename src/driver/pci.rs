@@ -109,7 +109,8 @@ impl PciDevice {
     }
 
     pub fn enable_dma(&self) {
-        self.write(COMMAND_REGISTER, self.read(COMMAND_REGISTER) | 0x3);
+        // Enable Bus Mastering, I/O and Memory Access
+        self.write(COMMAND_REGISTER, self.read(COMMAND_REGISTER) | 0b111);
     }
 
     fn read(&self, offset: u32) -> u32 {

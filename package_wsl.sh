@@ -7,3 +7,7 @@ mcopy -i moose.img@@1M ./target/x86_64-moose/$1/moose ::/boot
 mcopy -i moose.img@@1M limine.cfg limine/limine-bios.sys ::/boot/limine
 mcopy -i moose.img@@1M limine/BOOTX64.EFI ::/EFI/BOOT
 mcopy -i moose.img@@1M limine/BOOTIA32.EFI ::/EFI/BOOT
+
+# File system image creation
+dd if=/dev/zero of=fat.img bs=1024 count=32768
+mkfs.vfat fat.img
