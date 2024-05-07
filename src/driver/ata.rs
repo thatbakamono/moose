@@ -11,9 +11,7 @@ use core::mem::transmute;
 use deku::bitvec::{BitSlice, Msb0};
 use deku::{DekuError, DekuRead};
 use log::debug;
-use pretty_hex::pretty_hex;
 use spin::{Mutex, RwLock};
-use crate::driver::pit::PIT;
 
 const ATA_PRIMARY_IO_PORT: u16 = 0x1F0;
 const ATA_SECONDARY_IO_PORT: u16 = 0x170;
@@ -101,10 +99,6 @@ pub struct AtaDrive {
 }
 
 impl AtaDrive {
-    pub fn read_sector(&self, starting_sector_lba: u32) -> Vec<Sector> {
-        self.read_sectors(starting_sector_lba, 1)
-    }
-
     pub fn read_sectors(&self, starting_sector_lba: u32, n: u32) -> Vec<Sector> {
         assert!(starting_sector_lba < self.size_in_sectors);
         assert!(starting_sector_lba + n < self.size_in_sectors);
@@ -149,7 +143,9 @@ impl AtaDrive {
         let buffer_physical_address = self
             .memory_manager
             .read()
-            .translate_virtual_address_to_physical(VirtualAddress::new(buffer.as_ptr().addr() as u64))
+            .translate_virtual_address_to_physical(VirtualAddress::new(
+                buffer.as_ptr().addr() as u64
+            ))
             .unwrap()
             .as_u64() as u32;
 
@@ -231,7 +227,6 @@ impl AtaDrive {
         // Cut information bit from register address
         bmr_command_register &= 0xfffc;
 
-        let bmr_status_register = bmr_command_register + 2;
         let bmr_prdt_register = bmr_command_register + 4;
 
         // Allocate Physical Region Descriptor for data transfer
@@ -359,12 +354,14 @@ impl Ata {
             disks.push(disk);
         }
 
-        // @TODO: Hangs
-        /*
-        if let Some(disk) = Self::check_disk(ATA_SECONDARY, ATA_SLAVE, pci_device.clone(), memory_manager.clone()) {
+        if let Some(disk) = Self::check_disk(
+            ATA_SECONDARY,
+            ATA_SLAVE,
+            pci_device.clone(),
+            memory_manager.clone(),
+        ) {
             disks.push(disk);
         }
-        */
 
         disks
     }
@@ -403,7 +400,7 @@ impl Ata {
         // Check if drive exists
         if inb(io_base + ATA_REG_STATUS) == 0 {
             debug!("Disk offline");
-            //return None
+            return None;
         }
 
         // Poll until BSY bit clears
