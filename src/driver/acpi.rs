@@ -154,9 +154,8 @@ impl Acpi {
             let address_to_pointer_to_another_table = (self.rsdp.rsdt_address
                 + (mem::size_of::<SdtHeader>() as u32)
                 + (entry * 4)) as *const u32;
-            //let pointer_to_entry_header = unsafe { *address_to_pointer_to_another_table };
             let pointer_to_entry_header =
-                unsafe { core::ptr::read_unaligned(address_to_pointer_to_another_table) };
+                unsafe { ptr::read_unaligned(address_to_pointer_to_another_table) };
 
             // Map table into memory
             {

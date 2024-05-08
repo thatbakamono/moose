@@ -75,20 +75,18 @@ unsafe extern "C" fn _start() -> ! {
 
     arch::x86::perform_arch_initialization();
 
-    {
-        let memory_map_response = MEMORY_MAP_REQUEST.get_response().unwrap();
+    let memory_map_response = MEMORY_MAP_REQUEST.get_response().unwrap();
 
-        let physical_memory_offset = {
-            let higher_half_direct_mapping_response =
-                HIGHER_HALF_DIRECT_MAPPING_REQUEST.get_response().unwrap();
+    let physical_memory_offset = {
+        let higher_half_direct_mapping_response =
+            HIGHER_HALF_DIRECT_MAPPING_REQUEST.get_response().unwrap();
 
-            higher_half_direct_mapping_response.offset()
-        };
+        higher_half_direct_mapping_response.offset()
+    };
 
-        let frame_allocator = FrameAllocator::new(memory_map_response);
+    let frame_allocator = FrameAllocator::new(memory_map_response);
 
-        initialize_memory_manager(frame_allocator, physical_memory_offset);
-    }
+    initialize_memory_manager(frame_allocator, physical_memory_offset);
 
     initialize_heap().expect("Failed to initialize heap");
 
