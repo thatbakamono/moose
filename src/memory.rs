@@ -4,10 +4,27 @@ use core::ops::{Index, IndexMut};
 use limine::memory_map::EntryType;
 use limine::response::MemoryMapResponse;
 use snafu::Snafu;
+use spin::once::Once;
+use spin::RwLock;
 use x86_64::instructions::tlb;
 
 pub const PAGE_SIZE: usize = 4096;
 pub const FRAME_SIZE: usize = 4096;
+
+static MEMORY_MANAGER: Once<RwLock<MemoryManager>> = Once::new();
+
+pub fn initialize_memory_manager(frame_allocator: FrameAllocator, physical_memory_offset: u64) {
+    MEMORY_MANAGER.call_once(|| {
+        RwLock::new(MemoryManager {
+            frame_allocator,
+            physical_memory_offset,
+        })
+    });
+}
+
+pub fn memory_manager() -> &'static RwLock<MemoryManager> {
+    MEMORY_MANAGER.get().unwrap()
+}
 
 pub struct MemoryManager {
     frame_allocator: FrameAllocator,

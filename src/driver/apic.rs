@@ -4,7 +4,7 @@ use crate::driver::acpi::{Acpi, MadtEntryInner};
 use crate::driver::pit::PIT;
 use crate::kernel::Kernel;
 use crate::memory::{
-    Frame, MemoryError, Page, PageFlags, PhysicalAddress, VirtualAddress, PAGE_SIZE,
+    memory_manager, Frame, MemoryError, Page, PageFlags, PhysicalAddress, VirtualAddress, PAGE_SIZE,
 };
 use alloc::alloc::alloc_zeroed;
 use alloc::sync::Arc;
@@ -103,10 +103,9 @@ impl Apic {
     ) {
         let args = unsafe {
             // Map 0x8000 into memory. This shouldn't be mapped currently.
-            kernel
-                .read()
-                .memory_manager
-                .write()
+            let mut memory_manager = memory_manager().write();
+
+            memory_manager
                 .map(
                     &Page::new(VirtualAddress::new(0x8000)),
                     &Frame::new(PhysicalAddress::new(0x8000)),
@@ -292,19 +291,23 @@ impl LocalApic {
 
         // Make sure local apic base is mapped into memory
         // It is always on 4KiB boundary
-        unsafe {
-            match kernel.read().memory_manager.write().map(
-                &Page::new(VirtualAddress::new(local_apic_base)),
-                &Frame::new(PhysicalAddress::new(local_apic_base)),
-                PageFlags::WRITABLE | PageFlags::WRITE_THROUGH | PageFlags::DISABLE_CACHING,
-            ) {
+        {
+            let mut memory_manager = memory_manager().write();
+
+            match unsafe {
+                memory_manager.map(
+                    &Page::new(VirtualAddress::new(local_apic_base)),
+                    &Frame::new(PhysicalAddress::new(local_apic_base)),
+                    PageFlags::WRITABLE | PageFlags::WRITE_THROUGH | PageFlags::DISABLE_CACHING,
+                )
+            } {
                 Ok(()) => {}
                 Err(MemoryError::AlreadyMapped) => {}
                 Err(err) => {
                     panic!("{}", err);
                 }
             }
-        };
+        }
 
         let apic = LocalApic {
             local_apic_base,

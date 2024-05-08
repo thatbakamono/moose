@@ -1,13 +1,12 @@
 use crate::memory::{
-    Frame, MemoryError, MemoryManager, Page, PageFlags, PhysicalAddress, VirtualAddress,
+    memory_manager, Frame, MemoryError, Page, PageFlags, PhysicalAddress, VirtualAddress,
 };
 use alloc::sync::Arc;
 use alloc::{format, vec, vec::Vec};
-use core::{mem, slice};
+use core::{mem, ptr, slice};
 use deku::bitvec::{BitSlice, Msb0};
 use deku::{DekuEnumExt, DekuError, DekuRead};
 use log::info;
-use spin::RwLock;
 
 /// Root System Description Pointer Signature
 const RSDP_SIGNATURE: [u8; 8] = *b"RSD PTR ";
@@ -66,10 +65,26 @@ pub struct Rsdp {
     oem_id: [u8; 6],
     revision: u8,
     rsdt_address: u32,
-    length: u32,
-    xsdt_address: u64,
-    ext_checksum: u8,
-    reserved: [u8; 3],
+}
+
+impl Rsdp {
+    fn verify_checksum(&self) -> bool {
+        self.calculate_checksum() & 0xFF == 0
+    }
+
+    fn calculate_checksum(&self) -> u64 {
+        let size = mem::size_of::<Self>();
+
+        let mut checksum = 0;
+
+        let pointer = (self) as *const _ as *const u8;
+
+        for i in 0..size {
+            checksum += unsafe { ptr::read_volatile(pointer.add(i)) } as u64;
+        }
+
+        checksum
+    }
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -89,27 +104,32 @@ pub struct SdtHeader {
 pub struct Acpi {
     pub rsdp: Rsdp,
     pub madt: Arc<Madt>,
-    memory_manager: Arc<RwLock<MemoryManager>>,
 }
 
 impl Acpi {
-    pub fn with_memory_manager(
-        memory_manager: Arc<RwLock<MemoryManager>>,
-        rsdp: *const Rsdp,
-    ) -> Acpi {
-        let rsdt_address = unsafe { &*rsdp }.rsdt_address as u64;
+    pub fn with_memory_manager(rsdp: *const Rsdp) -> Acpi {
+        assert!(!rsdp.is_null());
 
-        unsafe {
-            memory_manager.write().map(
-                &Page::new(VirtualAddress::new(rsdt_address & 0xFFFF_FFFF_F000)),
-                &Frame::new(PhysicalAddress::new(rsdt_address & 0xFFFF_FFFF_F000)),
-                PageFlags::empty(),
-            )
+        assert!(unsafe { &*rsdp }.verify_checksum(), "Invalid RSDP");
+
+        {
+            let rsdt_address = unsafe { &*rsdp }.rsdt_address as u64;
+
+            assert!(rsdt_address != 0, "RSDP must contain valid address to RSDT");
+
+            let mut memory_manager = memory_manager().write();
+
+            unsafe {
+                memory_manager.map(
+                    &Page::new(VirtualAddress::new(rsdt_address & 0xFFFF_FFFF_F000)),
+                    &Frame::new(PhysicalAddress::new(rsdt_address & 0xFFFF_FFFF_F000)),
+                    PageFlags::empty(),
+                )
+            }
+            .expect("Cannot map RSDT");
         }
-        .expect("Cannot map RSDT");
 
         let mut acpi = Self {
-            memory_manager,
             rsdp: unsafe { *rsdp },
             madt: Arc::new(Madt::default()),
         };
@@ -134,16 +154,22 @@ impl Acpi {
             let address_to_pointer_to_another_table = (self.rsdp.rsdt_address
                 + (mem::size_of::<SdtHeader>() as u32)
                 + (entry * 4)) as *const u32;
-            let pointer_to_entry_header = unsafe { *address_to_pointer_to_another_table };
+            let pointer_to_entry_header =
+                unsafe { ptr::read_unaligned(address_to_pointer_to_another_table) };
 
             // Map table into memory
-            unsafe {
+            {
                 let page_number = pointer_to_entry_header as u64 & PAGE_NUMBER_MASK;
-                match self.memory_manager.write().map(
-                    &Page::new(VirtualAddress::new(page_number)),
-                    &Frame::new(PhysicalAddress::new(page_number)),
-                    PageFlags::empty(),
-                ) {
+
+                let mut memory_manager = memory_manager().write();
+
+                match unsafe {
+                    memory_manager.map(
+                        &Page::new(VirtualAddress::new(page_number)),
+                        &Frame::new(PhysicalAddress::new(page_number)),
+                        PageFlags::empty(),
+                    )
+                } {
                     // If page was unmapped, and we've just mapped it, it's ok
                     Ok(()) => {}
                     // If page was already mapped, it means that we have mapped it in previous loop
@@ -154,7 +180,7 @@ impl Acpi {
                         panic!("Memory error: {}", err);
                     }
                 }
-            };
+            }
 
             // We need to first parse every entry header, create slice and then parse it, because
             // we need to create safe slice around this table and the only way we can get the slice

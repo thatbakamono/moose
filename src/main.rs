@@ -1,4 +1,5 @@
 #![feature(abi_x86_interrupt)]
+#![feature(allocator_api)]
 #![feature(strict_provenance)]
 #![no_std]
 #![no_main]
@@ -17,8 +18,9 @@ mod serial;
 mod terminal;
 mod vga;
 
-use crate::allocator::init_heap;
+use crate::allocator::initialize_heap;
 use crate::driver::{pic::PIC, pit::PIT};
+use crate::memory::initialize_memory_manager;
 use crate::terminal::Terminal;
 use alloc::sync::Arc;
 use core::arch::asm;
@@ -38,7 +40,7 @@ use crate::driver::pci::Pci;
 use crate::kernel::Kernel;
 use crate::{
     logger::{init_logger, switch_to_post_boot_logger},
-    memory::{FrameAllocator, MemoryManager},
+    memory::FrameAllocator,
     serial::SerialPort,
     vga::Vga,
 };
@@ -73,24 +75,20 @@ unsafe extern "C" fn _start() -> ! {
 
     arch::x86::perform_arch_initialization();
 
-    let mut memory_manager = {
-        let memory_map_response = MEMORY_MAP_REQUEST.get_response().unwrap();
+    let memory_map_response = MEMORY_MAP_REQUEST.get_response().unwrap();
 
-        let physical_memory_offset = {
-            let higher_half_direct_mapping_response =
-                HIGHER_HALF_DIRECT_MAPPING_REQUEST.get_response().unwrap();
+    let physical_memory_offset = {
+        let higher_half_direct_mapping_response =
+            HIGHER_HALF_DIRECT_MAPPING_REQUEST.get_response().unwrap();
 
-            higher_half_direct_mapping_response.offset()
-        };
-
-        let frame_allocator = FrameAllocator::new(memory_map_response);
-
-        MemoryManager::new(frame_allocator, physical_memory_offset)
+        higher_half_direct_mapping_response.offset()
     };
 
-    init_heap(&mut memory_manager).expect("Failed to initialize heap");
+    let frame_allocator = FrameAllocator::new(memory_map_response);
 
-    let memory_manager = Arc::new(RwLock::new(memory_manager));
+    initialize_memory_manager(frame_allocator, physical_memory_offset);
+
+    initialize_heap().expect("Failed to initialize heap");
 
     let serial = Arc::new(Mutex::new(SerialPort::COM1.open().unwrap()));
 
@@ -126,15 +124,13 @@ unsafe extern "C" fn _start() -> ! {
     let rsdp_response = RSDP_REQUEST.get_response().unwrap();
 
     let acpi = Arc::new(Acpi::with_memory_manager(
-        Arc::clone(&memory_manager),
-        rsdp_response.address() as *const Rsdp,
+        rsdp_response.address() as *const Rsdp
     ));
     let apic = Arc::new(RwLock::new(Apic::initialize(Arc::clone(&acpi))));
 
     let kernel = Arc::new(RwLock::new(Kernel {
         acpi,
         apic,
-        memory_manager: memory_manager.clone(),
         gdt: x86_64::instructions::tables::sgdt(),
     }));
 
