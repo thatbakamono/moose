@@ -5,17 +5,17 @@
 
 extern crate alloc;
 
-pub mod allocator;
-pub mod arch;
-pub mod cpu;
-pub mod driver;
-pub mod font;
-pub mod kernel;
-pub mod logger;
-pub mod memory;
-pub mod serial;
-pub mod terminal;
-pub mod vga;
+mod allocator;
+mod arch;
+mod cpu;
+mod driver;
+mod font;
+mod kernel;
+mod logger;
+mod memory;
+mod serial;
+mod terminal;
+mod vga;
 
 use crate::allocator::init_heap;
 use crate::driver::{pic::PIC, pit::PIT};
@@ -27,17 +27,14 @@ use limine::request::{
     FramebufferRequest, HhdmRequest, MemoryMapRequest, PagingModeRequest, RsdpRequest,
 };
 use limine::BaseRevision;
-use log::{debug, error, info};
-use pretty_hex::pretty_hex;
+use log::{error, info};
 use raw_cpuid::CpuId;
 use spin::{Mutex, RwLock};
 use x86_64::registers::control::{Cr4, Cr4Flags, Efer, EferFlags};
 
 use crate::driver::acpi::{Acpi, Rsdp};
 use crate::driver::apic::{Apic, LocalApic};
-use crate::driver::ata::Ata;
-use crate::driver::pci::PciDeviceClassMassStorageControllerSubclass::IdeController;
-use crate::driver::pci::{Pci, PciDeviceClass};
+use crate::driver::pci::Pci;
 use crate::kernel::Kernel;
 use crate::{
     logger::{init_logger, switch_to_post_boot_logger},
@@ -142,18 +139,6 @@ unsafe extern "C" fn _start() -> ! {
     }));
 
     let pci_devices = Pci::build_device_tree();
-    let _ata = pci_devices
-        .into_iter()
-        .filter(|dev| dev.class == PciDeviceClass::MassStorageController(IdeController))
-        .for_each(|device| {
-            let ata = Ata::new(Arc::new(Mutex::new(device)), memory_manager.clone());
-
-            let sector = ata[1].read_sectors(0, 4);
-
-            for i in 0..sector.len() {
-                debug!("{}:\n{}", i, pretty_hex(&sector[i].as_slice()));
-            }
-        });
 
     let bsp_lapic = LocalApic::initialize_for_current_processor(Arc::clone(&kernel));
     let pcb = cpu::ProcessorControlBlock::get_pcb_for_current_processor();

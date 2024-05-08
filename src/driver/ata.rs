@@ -103,6 +103,7 @@ impl AtaDrive {
         assert!(starting_sector_lba < self.size_in_sectors);
         assert!(starting_sector_lba + n < self.size_in_sectors);
 
+        // Need to hold this lock until DMA transfer completes because ATA is not thread safe
         let device_lock = self.pci_device.lock();
 
         // Get BMR command register from PCI configuration space BAR4
@@ -212,6 +213,7 @@ impl AtaDrive {
         assert!(starting_sector_lba < self.size_in_sectors);
         assert!((starting_sector_lba + data.len() as u32) < self.size_in_sectors);
 
+        // Need to hold this lock until DMA transfer completes because ATA is not thread safe
         let device_lock = self.pci_device.lock();
 
         // Get BMR command register from PCI configuration space BAR4
@@ -318,49 +320,23 @@ impl AtaDrive {
     }
 }
 
-pub struct Ata {}
+pub struct Ata;
 
 impl Ata {
-    pub fn new(
+    pub fn perform_disk_discovery(
         pci_device: Arc<Mutex<PciDevice>>,
         memory_manager: Arc<RwLock<MemoryManager>>,
     ) -> Vec<AtaDrive> {
         let mut disks = vec![];
 
-        if let Some(disk) = Self::check_disk(
-            ATA_PRIMARY,
-            ATA_MASTER,
-            pci_device.clone(),
-            memory_manager.clone(),
-        ) {
-            disks.push(disk);
-        }
-
-        if let Some(disk) = Self::check_disk(
-            ATA_PRIMARY,
-            ATA_SLAVE,
-            pci_device.clone(),
-            memory_manager.clone(),
-        ) {
-            disks.push(disk);
-        }
-
-        if let Some(disk) = Self::check_disk(
-            ATA_SECONDARY,
-            ATA_MASTER,
-            pci_device.clone(),
-            memory_manager.clone(),
-        ) {
-            disks.push(disk);
-        }
-
-        if let Some(disk) = Self::check_disk(
-            ATA_SECONDARY,
-            ATA_SLAVE,
-            pci_device.clone(),
-            memory_manager.clone(),
-        ) {
-            disks.push(disk);
+        for bus in [ATA_PRIMARY, ATA_SECONDARY] {
+            for drive in [ATA_MASTER, ATA_SLAVE] {
+                if let Some(disk) =
+                    Self::check_disk(bus, drive, pci_device.clone(), memory_manager.clone())
+                {
+                    disks.push(disk);
+                }
+            }
         }
 
         disks
