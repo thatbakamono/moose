@@ -10,8 +10,12 @@ pub use madt::*;
 pub use rsdp::*;
 pub use sdt::*;
 
-use crate::memory::{
-    memory_manager, Frame, MemoryError, Page, PageFlags, PhysicalAddress, VirtualAddress,
+use crate::{
+    arch::x86::asm::{inb, inl, inw, outb, outl, outw},
+    driver::pci::Pci,
+    memory::{
+        memory_manager, Frame, MemoryError, Page, PageFlags, PhysicalAddress, VirtualAddress,
+    },
 };
 use alloc::{boxed::Box, sync::Arc};
 use aml::{AmlContext, DebugVerbosity, Handler};
@@ -198,9 +202,34 @@ impl Acpi {
 
         let dsdt = dsdt.expect("DSDT must be present.");
 
-        let mut aml_context = AmlContext::new(Box::new(NoOpHandler), DebugVerbosity::None);
+        let mut aml_context = AmlContext::new(Box::new(AmlHandler), DebugVerbosity::None);
 
         aml_context.parse_table(&dsdt.aml).unwrap();
+
+        // Map memory mapped I/O frames of the first and the second HPET (high precision event timer)
+        {
+            let mut memory_manager = memory_manager().write();
+
+            unsafe {
+                memory_manager
+                    .map(
+                        &Page::new(VirtualAddress::new(0xFED00000)),
+                        &Frame::new(PhysicalAddress::new(0xFED00000)),
+                        PageFlags::WRITABLE | PageFlags::WRITE_THROUGH | PageFlags::DISABLE_CACHING,
+                    )
+                    .unwrap();
+
+                memory_manager
+                    .map(
+                        &Page::new(VirtualAddress::new(0xFED80000)),
+                        &Frame::new(PhysicalAddress::new(0xFED80000)),
+                        PageFlags::WRITABLE | PageFlags::WRITE_THROUGH | PageFlags::DISABLE_CACHING,
+                    )
+                    .unwrap()
+            }
+        }
+
+        aml_context.initialize_objects().unwrap();
 
         Self {
             rsdp: unsafe { *rsdp },
@@ -216,108 +245,140 @@ impl Acpi {
     }
 }
 
-// A no-op handler implementation. Can be used only if you don't intend to execute any AML code.
-pub struct NoOpHandler;
+struct AmlHandler;
 
-impl Handler for NoOpHandler {
-    fn read_u8(&self, _address: usize) -> u8 {
-        0
+impl Handler for AmlHandler {
+    fn read_u8(&self, address: usize) -> u8 {
+        unsafe { ptr::read_volatile(address as *const u8) }
     }
 
-    fn read_u16(&self, _address: usize) -> u16 {
-        0
+    fn read_u16(&self, address: usize) -> u16 {
+        unsafe { ptr::read_volatile(address as *const u16) }
     }
 
-    fn read_u32(&self, _address: usize) -> u32 {
-        0
+    fn read_u32(&self, address: usize) -> u32 {
+        unsafe { ptr::read_volatile(address as *const u32) }
     }
 
-    fn read_u64(&self, _address: usize) -> u64 {
-        0
+    fn read_u64(&self, address: usize) -> u64 {
+        unsafe { ptr::read_volatile(address as *const u64) }
     }
 
-    fn write_u8(&mut self, _address: usize, _value: u8) {}
-
-    fn write_u16(&mut self, _address: usize, _value: u16) {}
-
-    fn write_u32(&mut self, _address: usize, _value: u32) {}
-
-    fn write_u64(&mut self, _address: usize, _value: u64) {}
-
-    fn read_io_u8(&self, _port: u16) -> u8 {
-        0
+    fn write_u8(&mut self, address: usize, value: u8) {
+        unsafe { ptr::write_volatile(address as *mut u8, value) }
     }
 
-    fn read_io_u16(&self, _port: u16) -> u16 {
-        0
+    fn write_u16(&mut self, address: usize, value: u16) {
+        unsafe { ptr::write_volatile(address as *mut u16, value) }
     }
 
-    fn read_io_u32(&self, _port: u16) -> u32 {
-        0
+    fn write_u32(&mut self, address: usize, value: u32) {
+        unsafe { ptr::write_volatile(address as *mut u32, value) }
     }
 
-    fn write_io_u8(&self, _port: u16, _value: u8) {}
-
-    fn write_io_u16(&self, _port: u16, _value: u16) {}
-
-    fn write_io_u32(&self, _port: u16, _value: u32) {}
-
-    fn read_pci_u8(&self, _segment: u16, _bus: u8, _device: u8, _function: u8, _offset: u16) -> u8 {
-        0
+    fn write_u64(&mut self, address: usize, value: u64) {
+        unsafe { ptr::write_volatile(address as *mut u64, value) }
     }
 
-    fn read_pci_u16(
-        &self,
-        _segment: u16,
-        _bus: u8,
-        _device: u8,
-        _function: u8,
-        _offset: u16,
-    ) -> u16 {
-        0
+    fn read_io_u8(&self, port: u16) -> u8 {
+        inb(port)
     }
 
-    fn read_pci_u32(
-        &self,
-        _segment: u16,
-        _bus: u8,
-        _device: u8,
-        _function: u8,
-        _offset: u16,
-    ) -> u32 {
-        0
+    fn read_io_u16(&self, port: u16) -> u16 {
+        inw(port)
+    }
+
+    fn read_io_u32(&self, port: u16) -> u32 {
+        inl(port)
+    }
+
+    fn write_io_u8(&self, port: u16, value: u8) {
+        outb(port, value)
+    }
+
+    fn write_io_u16(&self, port: u16, value: u16) {
+        outw(port, value)
+    }
+
+    fn write_io_u32(&self, port: u16, value: u32) {
+        outl(port, value)
+    }
+
+    fn read_pci_u8(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16) -> u8 {
+        assert_eq!(segment, 0);
+
+        Pci::read_u8(bus as u32, device as u32, function as u32, offset as u32)
+    }
+
+    fn read_pci_u16(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16) -> u16 {
+        assert_eq!(segment, 0);
+
+        Pci::read_u16(bus as u32, device as u32, function as u32, offset as u32)
+    }
+
+    fn read_pci_u32(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16) -> u32 {
+        assert_eq!(segment, 0);
+
+        Pci::read_u32(bus as u32, device as u32, function as u32, offset as u32)
     }
 
     fn write_pci_u8(
         &self,
-        _segment: u16,
-        _bus: u8,
-        _device: u8,
-        _function: u8,
-        _offset: u16,
-        _value: u8,
+        segment: u16,
+        bus: u8,
+        device: u8,
+        function: u8,
+        offset: u16,
+        value: u8,
     ) {
+        assert_eq!(segment, 0);
+
+        Pci::write_u8(
+            bus as u32,
+            device as u32,
+            function as u32,
+            offset as u32,
+            value,
+        );
     }
 
     fn write_pci_u16(
         &self,
-        _segment: u16,
-        _bus: u8,
-        _device: u8,
-        _function: u8,
-        _offset: u16,
-        _value: u16,
+        segment: u16,
+        bus: u8,
+        device: u8,
+        function: u8,
+        offset: u16,
+        value: u16,
     ) {
+        assert_eq!(segment, 0);
+
+        Pci::write_u16(
+            bus as u32,
+            device as u32,
+            function as u32,
+            offset as u32,
+            value,
+        );
     }
 
     fn write_pci_u32(
         &self,
-        _segment: u16,
-        _bus: u8,
-        _device: u8,
-        _function: u8,
-        _offset: u16,
-        _value: u32,
+        segment: u16,
+        bus: u8,
+        device: u8,
+        function: u8,
+        offset: u16,
+        value: u32,
     ) {
+        assert_eq!(segment, 0);
+
+        Pci::write_u32(
+            bus as u32,
+            device as u32,
+            function as u32,
+            offset as u32,
+            value,
+        );
     }
 }
