@@ -6,6 +6,9 @@ use log::debug;
 const CONFIG_ADDRESS: u16 = 0xCF8;
 const CONFIG_DATA: u16 = 0xCFC;
 
+const BAR_START: u32 = 0x10;
+const COMMAND_REGISTER: u32 = 0x4;
+
 pub struct Pci {}
 
 impl Pci {
@@ -18,10 +21,12 @@ impl Pci {
 
         for bus in 0..256 {
             for device in 0..32 {
-                // @TODO: Make tree-like structure of detected
-                // devices in system (not only on PCI bus ofc, maybe use some AML and ACPI tables?)
-                if let Some(dev) = Pci::scan_device(bus, device) {
-                    devices.push(dev);
+                for function in 0..8 {
+                    // @TODO: Make tree-like structure of detected
+                    // devices in system (not only on PCI bus ofc, maybe use some AML and ACPI tables?)
+                    if let Some(dev) = Pci::scan_device(bus, device, function) {
+                        devices.push(dev);
+                    }
                 }
             }
         }
@@ -29,21 +34,20 @@ impl Pci {
         devices
     }
 
-    fn scan_device(bus: u32, device: u32) -> Option<PciDevice> {
-        let vendor_id = Pci::read(bus, device, 0, 0);
+    fn scan_device(bus: u32, device: u32, function: u32) -> Option<PciDevice> {
+        let vendor_id = Pci::read(bus, device, function, 0);
         if vendor_id == 0xFFFF {
             // Device does not exist
             return None;
         }
 
-        let device_id = Pci::read(bus, device, 0, 2);
-        let class_code = Pci::read(bus, device, 0, 10) >> 8;
-        let subclass_code = Pci::read(bus, device, 0, 10) & 0xF;
+        let device_id = Pci::read(bus, device, function, 2);
+        let class_code = Pci::read(bus, device, function, 10) >> 8;
+        let subclass_code = Pci::read(bus, device, function, 10) & 0xF;
         let device = PciDevice {
             bus,
             device,
-            // We don't support multi-function devices currently
-            function: 0,
+            function,
             vendor_id,
             device_id,
             class: PciDeviceClass::parse(class_code as u32, subclass_code as u32),
@@ -88,10 +92,10 @@ impl PciDevice {
             "There are only 6 BARs on PCI devices numbered from 0 to 5"
         );
 
-        let bar_offset = 0x10 + (bar * 4) as u32;
+        let bar_offset = BAR_START + (bar * 4) as u32;
 
-        let lower_word = self.read(bar_offset) as u32;
-        let higher_word = self.read(bar_offset + 2) as u32;
+        let lower_word = self.read(bar_offset);
+        let higher_word = self.read(bar_offset + 2);
 
         return (higher_word << 16) | lower_word;
     }
@@ -104,7 +108,12 @@ impl PciDevice {
         (self.read(0x3C) & 0xFF) as u8
     }
 
-    fn read(&self, offset: u32) -> u16 {
+    pub fn enable_dma(&self) {
+        // Enable Bus Mastering, I/O and Memory Access
+        self.write(COMMAND_REGISTER, self.read(COMMAND_REGISTER) | 0b111);
+    }
+
+    fn read(&self, offset: u32) -> u32 {
         let address: u32 = (self.bus << 16)
             | (self.device << 11)
             | (self.function << 8)
@@ -112,7 +121,18 @@ impl PciDevice {
             | 0x80000000;
         outl(CONFIG_ADDRESS, address);
 
-        return ((inl(CONFIG_DATA) >> ((offset & 2) * 8)) & 0xFFFF) as u16;
+        return inl(CONFIG_DATA);
+    }
+
+    fn write(&self, offset: u32, value: u32) {
+        let address: u32 = (self.bus << 16)
+            | (self.device << 11)
+            | (self.function << 8)
+            | (offset & 0xFC)
+            | 0x80000000;
+        outl(CONFIG_ADDRESS, address);
+
+        outl(CONFIG_DATA, value);
     }
 }
 
@@ -131,11 +151,13 @@ fn get_device_name(device: &PciDevice) -> &str {
         (0x8086, 0x100e) => "82540EM Gigabit Ethernet Controller",
         (0x8086, 0x1237) => "440FX - 82441FX PMC [Natoma]",
         (0x8086, 0x7000) => "82371SB PIIX3 ISA [Natoma/Triton II]",
+        (0x8086, 0x7010) => "82371SB PIIX3 IDE [Natoma/Triton II]",
+        (0x8086, 0x7113) => "82371AB/EB/MB PIIX4 ACPI",
         _ => "Unknown",
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClass {
     Undefined(PciDeviceClassUndefinedSubclass),
     MassStorageController(PciDeviceClassMassStorageControllerSubclass),
@@ -320,13 +342,13 @@ impl PciDeviceClass {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClassUndefinedSubclass {
     NonVgaCompatibleUnclassifiedDevice,
     VgaCompatibleUnclassifiedDevice,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClassMassStorageControllerSubclass {
     ScsiBusController,
     IdeController,
@@ -339,7 +361,7 @@ pub enum PciDeviceClassMassStorageControllerSubclass {
     NonVolatileMemoryController,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClassNetworkControllerSubclass {
     EthernetController,
     TokenRingController,
@@ -352,14 +374,14 @@ pub enum PciDeviceClassNetworkControllerSubclass {
     FabricController,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClassDisplayControllerSubclass {
     VgaCompatibleController,
     XgaController,
     NotVgaCompatible3dController,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClassMultimediaControllerSubclass {
     MultimediaVideoController,
     MultimediaAudioController,
@@ -367,13 +389,13 @@ pub enum PciDeviceClassMultimediaControllerSubclass {
     AudioDevice,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClassMemoryControllerSubclass {
     RamController,
     FlashController,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClassBridgeSubclass {
     HostBridge,
     IsaBridge,
@@ -388,7 +410,7 @@ pub enum PciDeviceClassBridgeSubclass {
     InfiniBandToPciHostBridge,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClassSimpleCommunicationControllerSubclass {
     SerialController,
     ParallelController,
@@ -398,7 +420,7 @@ pub enum PciDeviceClassSimpleCommunicationControllerSubclass {
     SmartCardController,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClassBaseSystemPeripheralSubclass {
     Pic,
     DmaController,
@@ -409,7 +431,7 @@ pub enum PciDeviceClassBaseSystemPeripheralSubclass {
     IoMmu,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClassInputDeviceControllerSubclass {
     KeyboardController,
     DigitizerPen,
@@ -418,13 +440,13 @@ pub enum PciDeviceClassInputDeviceControllerSubclass {
     GameportController,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClassDockingStationSubclass {
     Generic,
 }
 
 #[allow(nonstandard_style)]
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClassProcessorSubclass {
     x386,
     x486,
@@ -436,7 +458,7 @@ pub enum PciDeviceClassProcessorSubclass {
     CoProcessor,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClassSerialBusControllerSubclass {
     FireWireController,
     AccessBusController,
@@ -450,7 +472,7 @@ pub enum PciDeviceClassSerialBusControllerSubclass {
     CanbusController,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClassWirelessControllerSubclass {
     IrdaCompatibleController,
     ConsumerIrController,
@@ -461,12 +483,12 @@ pub enum PciDeviceClassWirelessControllerSubclass {
     EthernetControllerB,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClassIntelligentControllerSubclass {
     I20,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClassSatelliteCommunicationControllerSubclass {
     SatelliteTvController,
     SatelliteAudioController,
@@ -474,13 +496,13 @@ pub enum PciDeviceClassSatelliteCommunicationControllerSubclass {
     SatelliteDataController,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClassEncryptionControllerSubclass {
     NetworkAndComputingEncryptionOrDecryption,
     EntertainmentEncryptionOrDecryption,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PciDeviceClassSignalProcessingControllerSubclass {
     DpioModules,
     PerformanceCounters,

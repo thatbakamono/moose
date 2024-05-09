@@ -134,7 +134,7 @@ unsafe extern "C" fn _start() -> ! {
         gdt: x86_64::instructions::tables::sgdt(),
     }));
 
-    Pci::build_device_tree();
+    let _pci_devices = Pci::build_device_tree();
 
     let bsp_lapic = LocalApic::initialize_for_current_processor(Arc::clone(&kernel));
     let pcb = cpu::ProcessorControlBlock::get_pcb_for_current_processor();

@@ -26,6 +26,31 @@ pub fn inb(port: u16) -> u8 {
 }
 
 #[inline]
+pub fn outw(port: u16, byte: u16) {
+    unsafe {
+        asm!(
+            "out dx, ax",
+            in("dx") port,
+            in("ax") byte,
+        );
+    }
+}
+
+pub fn inw(port: u16) -> u16 {
+    let mut value;
+
+    unsafe {
+        asm!(
+            "in ax, dx",
+            out("ax") value,
+            in("dx") port,
+        );
+    }
+
+    value
+}
+
+#[inline]
 pub fn outl(port: u16, byte: u32) {
     unsafe {
         asm!(
