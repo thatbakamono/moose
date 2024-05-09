@@ -11,7 +11,7 @@ use core::mem::transmute;
 use deku::bitvec::{BitSlice, Msb0};
 use deku::{DekuError, DekuRead};
 use log::debug;
-use spin::RwLock;
+use spin::Mutex;
 
 const ATA_PRIMARY_IO_PORT: u16 = 0x1F0;
 const ATA_SECONDARY_IO_PORT: u16 = 0x170;
