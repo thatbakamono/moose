@@ -1,6 +1,6 @@
 use crate::arch::x86::asm::{inb, inw, outb, outl};
 use crate::driver::pci::PciDevice;
-use crate::memory::{MemoryManager, VirtualAddress};
+use crate::memory::{memory_manager, VirtualAddress};
 use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -11,7 +11,7 @@ use core::mem::transmute;
 use deku::bitvec::{BitSlice, Msb0};
 use deku::{DekuError, DekuRead};
 use log::debug;
-use spin::{Mutex, RwLock};
+use spin::RwLock;
 
 const ATA_PRIMARY_IO_PORT: u16 = 0x1F0;
 const ATA_SECONDARY_IO_PORT: u16 = 0x170;
@@ -84,7 +84,7 @@ const ATA_CMD_IDENTIFY: u8 = 0xEC;
 pub type Sector = [u8; ATA_SECTOR_SIZE as usize];
 
 #[repr(C, packed)]
-pub struct PhysicalRegionDescriptor {
+struct PhysicalRegionDescriptor {
     buffer_physical_address: u32,
     transfer_size: u16,
     mark_end: u16,
@@ -94,7 +94,6 @@ pub struct AtaDrive {
     bus: u8,
     drive: u8,
     pci_device: Arc<Mutex<PciDevice>>,
-    memory_manager: Arc<RwLock<MemoryManager>>,
     size_in_sectors: u32,
 }
 
@@ -135,14 +134,12 @@ impl AtaDrive {
 
         // Convert virtual addresses to physical addresses
         let prd_pointer = &mut *prd as *mut PhysicalRegionDescriptor;
-        let prd_physical_address = self
-            .memory_manager
+        let prd_physical_address = memory_manager()
             .read()
             .translate_virtual_address_to_physical(VirtualAddress::new(prd_pointer.addr() as u64))
             .unwrap()
             .as_u64() as u32;
-        let buffer_physical_address = self
-            .memory_manager
+        let buffer_physical_address = memory_manager()
             .read()
             .translate_virtual_address_to_physical(VirtualAddress::new(
                 buffer.as_ptr().addr() as u64
@@ -241,14 +238,12 @@ impl AtaDrive {
 
         // Convert virtual addresses to physical addresses
         let prd_pointer = &mut *prd as *mut PhysicalRegionDescriptor;
-        let prd_physical_address = self
-            .memory_manager
+        let prd_physical_address = memory_manager()
             .read()
             .translate_virtual_address_to_physical(VirtualAddress::new(prd_pointer.addr() as u64))
             .unwrap()
             .as_u64() as u32;
-        let buffer_physical_address = self
-            .memory_manager
+        let buffer_physical_address = memory_manager()
             .read()
             .translate_virtual_address_to_physical(VirtualAddress::new(data.as_ptr().addr() as u64))
             .unwrap()
@@ -323,17 +318,12 @@ impl AtaDrive {
 pub struct Ata;
 
 impl Ata {
-    pub fn perform_disk_discovery(
-        pci_device: Arc<Mutex<PciDevice>>,
-        memory_manager: Arc<RwLock<MemoryManager>>,
-    ) -> Vec<AtaDrive> {
+    pub fn perform_disk_discovery(pci_device: Arc<Mutex<PciDevice>>) -> Vec<AtaDrive> {
         let mut disks = vec![];
 
         for bus in [ATA_PRIMARY, ATA_SECONDARY] {
             for drive in [ATA_MASTER, ATA_SLAVE] {
-                if let Some(disk) =
-                    Self::check_disk(bus, drive, pci_device.clone(), memory_manager.clone())
-                {
+                if let Some(disk) = Self::check_disk(bus, drive, pci_device.clone()) {
                     disks.push(disk);
                 }
             }
@@ -342,12 +332,7 @@ impl Ata {
         disks
     }
 
-    fn check_disk(
-        bus: u8,
-        drive: u8,
-        pci_device: Arc<Mutex<PciDevice>>,
-        memory_manager: Arc<RwLock<MemoryManager>>,
-    ) -> Option<AtaDrive> {
+    fn check_disk(bus: u8, drive: u8, pci_device: Arc<Mutex<PciDevice>>) -> Option<AtaDrive> {
         let io_base = match bus {
             ATA_PRIMARY => ATA_PRIMARY_IO_PORT,
             ATA_SECONDARY => ATA_SECONDARY_IO_PORT,
@@ -407,7 +392,6 @@ impl Ata {
             bus,
             drive,
             pci_device,
-            memory_manager,
             size_in_sectors: parsed_identify_response.capacity,
         })
     }
