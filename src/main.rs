@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 #![feature(abi_x86_interrupt)]
 #![feature(allocator_api)]
 #![feature(strict_provenance)]
