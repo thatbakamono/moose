@@ -1,17 +1,16 @@
+mod io_apic;
+mod local_apic;
+
+pub use io_apic::*;
+pub use local_apic::*;
+
 use crate::arch::x86::idt::IDT;
 use crate::driver::acpi::{Acpi, MadtEntryInner};
-use crate::driver::apic::io_apic::{IoApic, RedirectionEntry};
-use crate::driver::apic::local_apic::{
-    ap_start, timer_interrupt_handler, LocalApic, AP_STARTUP_SPINLOCK,
-    LOCAL_APIC_INTERRUPT_OPTIONS_REGISTER, LOCAL_APIC_INTERRUPT_TARGET_PROCESSOR_REGISTER,
-    STACK_SIZE, TIMER_IRQ, TRAMPOLINE_CODE,
-};
 use crate::driver::pit::PIT;
 use crate::kernel::Kernel;
 use crate::memory::{memory_manager, Page, PageFlags, VirtualAddress, PAGE_SIZE};
 use alloc::alloc::alloc_zeroed;
 use alloc::sync::Arc;
-use alloc::vec;
 use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::arch::asm;
@@ -21,13 +20,10 @@ use raw_cpuid::CpuId;
 use spin::RwLock;
 use x86_64::instructions::interrupts::without_interrupts;
 
-pub mod io_apic;
-pub mod local_apic;
-
 pub struct Apic {
     pub local_apic_timer_ticks_per_second: u64,
     pub acpi: Arc<Acpi>,
-    io_apic: Vec<IoApic>,
+    io_apics: Vec<IoApic>,
 }
 
 impl Apic {
@@ -41,9 +37,8 @@ impl Apic {
 
         unsafe { IDT[TIMER_IRQ as u8].set_handler_fn(timer_interrupt_handler) };
 
-        let mut io_apics = vec![];
-
-        acpi.madt
+        let io_apics = acpi
+            .madt
             .entries
             .clone()
             .into_iter()
@@ -51,20 +46,19 @@ impl Apic {
                 MadtEntryInner::IoApic(io_apic) => Some(io_apic),
                 _ => None,
             })
-            .for_each(|ioapic| {
-                io_apics.push(IoApic::new(ioapic));
-            });
+            .map(|entry| IoApic::new(entry))
+            .collect();
 
         Apic {
             local_apic_timer_ticks_per_second: 0,
             acpi,
-            io_apic: io_apics,
+            io_apics,
         }
     }
 
     pub fn redirect_interrupt(&self, redirection_entry: RedirectionEntry, irq: u8) {
         let io_apic: IoApic = self
-            .io_apic
+            .io_apics
             .clone()
             .into_iter()
             .filter(|apic| {
