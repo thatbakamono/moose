@@ -40,13 +40,12 @@ impl Apic {
         let io_apics = acpi
             .madt
             .entries
-            .clone()
-            .into_iter()
-            .filter_map(|entry| match entry.inner {
+            .iter()
+            .filter_map(|entry| match &entry.inner {
                 MadtEntryInner::IoApic(io_apic) => Some(io_apic),
                 _ => None,
             })
-            .map(|entry| IoApic::new(entry))
+            .map(|entry| IoApic::new(entry.clone()))
             .collect();
 
         Apic {
