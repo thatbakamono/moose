@@ -212,17 +212,15 @@ impl Acpi {
 
             unsafe {
                 memory_manager
-                    .map(
+                    .map_identity(
                         &Page::new(VirtualAddress::new(0xFED00000)),
-                        &Frame::new(PhysicalAddress::new(0xFED00000)),
                         PageFlags::WRITABLE | PageFlags::WRITE_THROUGH | PageFlags::DISABLE_CACHING,
                     )
                     .unwrap();
 
                 memory_manager
-                    .map(
+                    .map_identity(
                         &Page::new(VirtualAddress::new(0xFED80000)),
-                        &Frame::new(PhysicalAddress::new(0xFED80000)),
                         PageFlags::WRITABLE | PageFlags::WRITE_THROUGH | PageFlags::DISABLE_CACHING,
                     )
                     .unwrap()
@@ -305,19 +303,25 @@ impl Handler for AmlHandler {
     }
 
     fn read_pci_u8(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16) -> u8 {
-        assert_eq!(segment, 0);
+        if segment != 0 {
+            todo!();
+        }
 
         Pci::read_u8(bus as u32, device as u32, function as u32, offset as u32)
     }
 
     fn read_pci_u16(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16) -> u16 {
-        assert_eq!(segment, 0);
+        if segment != 0 {
+            todo!();
+        }
 
         Pci::read_u16(bus as u32, device as u32, function as u32, offset as u32)
     }
 
     fn read_pci_u32(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16) -> u32 {
-        assert_eq!(segment, 0);
+        if segment != 0 {
+            todo!();
+        }
 
         Pci::read_u32(bus as u32, device as u32, function as u32, offset as u32)
     }
@@ -331,7 +335,9 @@ impl Handler for AmlHandler {
         offset: u16,
         value: u8,
     ) {
-        assert_eq!(segment, 0);
+        if segment != 0 {
+            todo!();
+        }
 
         Pci::write_u8(
             bus as u32,
@@ -351,7 +357,9 @@ impl Handler for AmlHandler {
         offset: u16,
         value: u16,
     ) {
-        assert_eq!(segment, 0);
+        if segment != 0 {
+            todo!();
+        }
 
         Pci::write_u16(
             bus as u32,
@@ -371,7 +379,9 @@ impl Handler for AmlHandler {
         offset: u16,
         value: u32,
     ) {
-        assert_eq!(segment, 0);
+        if segment != 0 {
+            todo!();
+        }
 
         Pci::write_u32(
             bus as u32,

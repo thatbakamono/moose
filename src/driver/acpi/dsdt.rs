@@ -26,7 +26,7 @@ fn aml_reader(
 ) -> Result<(&BitSlice<u8, Msb0>, Vec<u8>), DekuError> {
     let mut remaining_bytes = length - 36;
 
-    let mut entries = vec![];
+    let mut entries = Vec::with_capacity(remaining_bytes);
 
     let mut rest = rest;
 
