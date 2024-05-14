@@ -1,6 +1,5 @@
 use crate::arch::x86::idt::IDT;
 use crate::cpu::ProcessorControlBlock;
-use crate::driver::apic::{to_irq_number, IrqId, IrqLevel};
 use crate::driver::pit::PIT;
 use crate::kernel::Kernel;
 use crate::memory::{memory_manager, MemoryError, Page, PageFlags, VirtualAddress};
@@ -40,7 +39,6 @@ pub const APIC_BASE_MSR_APIC_GLOBAL_ENABLE_FLAG: u64 = 1 << 11;
 pub const APIC_BASE_MSR_APIC_BASE_FIELD_MASK: u64 = 0xFFFFFF000;
 
 pub const STACK_SIZE: usize = 4 * 1024 * 1024;
-pub const TIMER_IRQ: u32 = to_irq_number(IrqLevel::Clock, IrqId(0)) as u32;
 pub const LOCAL_APIC_TIMER_PERIODIC: u32 = 1 << 17;
 
 pub static TRAMPOLINE_CODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/trampoline"));
@@ -141,7 +139,7 @@ impl LocalApic {
 
         self.write_register(
             LOCAL_APIC_LVT_TIMER_REGISTER,
-            TIMER_IRQ | LOCAL_APIC_TIMER_PERIODIC,
+            self.kernel.read().timer_irq as u32 | LOCAL_APIC_TIMER_PERIODIC,
         );
 
         // Start the timer
