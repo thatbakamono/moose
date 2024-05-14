@@ -1,4 +1,4 @@
-use crate::driver::apic::LocalApic;
+use crate::driver::apic::local_apic::LocalApic;
 use alloc::boxed::Box;
 use core::cell::OnceCell;
 use x86_64::registers::segmentation::{Segment64, GS};

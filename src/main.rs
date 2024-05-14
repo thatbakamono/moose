@@ -36,7 +36,8 @@ use spin::{Mutex, RwLock};
 use x86_64::registers::control::{Cr4, Cr4Flags, Efer, EferFlags};
 
 use crate::driver::acpi::{Acpi, Rsdp};
-use crate::driver::apic::{Apic, LocalApic};
+use crate::driver::apic::local_apic::LocalApic;
+use crate::driver::apic::Apic;
 use crate::driver::pci::Pci;
 use crate::kernel::Kernel;
 use crate::{
