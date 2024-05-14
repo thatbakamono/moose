@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 #![feature(abi_x86_interrupt)]
 #![feature(allocator_api)]
 #![feature(strict_provenance)]
@@ -34,6 +35,7 @@ use raw_cpuid::CpuId;
 use spin::{Mutex, RwLock};
 use x86_64::registers::control::{Cr4, Cr4Flags, Efer, EferFlags};
 
+use crate::arch::irq::{IrqAllocator, IrqLevel};
 use crate::driver::acpi::{Acpi, Rsdp};
 use crate::driver::apic::{Apic, LocalApic};
 use crate::driver::pci::Pci;
@@ -123,13 +125,18 @@ unsafe extern "C" fn _start() -> ! {
 
     let rsdp_response = RSDP_REQUEST.get_response().unwrap();
 
+    let mut irq_allocator = IrqAllocator::new();
+    let timer_irq = irq_allocator.allocate_irq(IrqLevel::Clock);
+
     let acpi = Arc::new(Acpi::from_rsdp(rsdp_response.address() as *const Rsdp));
-    let apic = Arc::new(RwLock::new(Apic::initialize(Arc::clone(&acpi))));
+    let apic = Arc::new(RwLock::new(Apic::initialize(Arc::clone(&acpi), timer_irq)));
 
     let kernel = Arc::new(RwLock::new(Kernel {
         acpi,
         apic,
         gdt: x86_64::instructions::tables::sgdt(),
+        timer_irq,
+        irq_allocator: Arc::new(Mutex::new(irq_allocator)),
     }));
 
     let _pci_devices = Pci::build_device_tree();
