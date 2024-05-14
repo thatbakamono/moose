@@ -1,6 +1,6 @@
 use crate::arch::x86::idt::IDT;
 use crate::cpu::ProcessorControlBlock;
-use crate::driver::acpi::{Acpi, MadtEntryInner};
+use crate::driver::acpi::{Acpi, MadtEntryInner, MadtIoApic};
 use crate::driver::pit::PIT;
 use crate::kernel::Kernel;
 use crate::memory::{
@@ -8,6 +8,9 @@ use crate::memory::{
 };
 use alloc::alloc::alloc_zeroed;
 use alloc::sync::Arc;
+use alloc::vec;
+use alloc::vec::Vec;
+use bitfield_struct::bitfield;
 use core::alloc::Layout;
 use core::arch::asm;
 use core::ptr;
@@ -77,6 +80,7 @@ pub unsafe extern "C" fn ap_start(apic_processor_id: u64, kernel_ptr: *const RwL
 pub struct Apic {
     pub local_apic_timer_ticks_per_second: u64,
     pub acpi: Arc<Acpi>,
+    io_apic: Vec<IoApic>,
 }
 
 impl Apic {
@@ -90,10 +94,47 @@ impl Apic {
 
         unsafe { IDT[TIMER_IRQ as u8].set_handler_fn(timer_interrupt_handler) };
 
+        let mut io_apics = vec![];
+
+        acpi.madt
+            .entries
+            .clone()
+            .into_iter()
+            .filter_map(|entry| match entry.inner {
+                MadtEntryInner::IoApic(io_apic) => Some(io_apic),
+                _ => None,
+            })
+            .for_each(|ioapic| {
+                let apic = IoApic::new(ioapic);
+                apic.init();
+                io_apics.push(apic);
+            });
+
         Apic {
             local_apic_timer_ticks_per_second: 0,
             acpi,
+            io_apic: io_apics,
         }
+    }
+
+    pub fn redirect_interrupt(&self, redirection_entry: RedirectionEntry, irq: u8) {
+        let io_apic: IoApic = self
+            .io_apic
+            .clone()
+            .into_iter()
+            .filter(|apic| {
+                let start = apic.madt_io_apic.global_system_interrupt_base;
+                let end = start + apic.get_redirection_entry_count();
+
+                (start..end).contains(&(irq as u32))
+            })
+            .next()
+            .unwrap();
+
+        io_apic.redirect_interrupt(
+            redirection_entry,
+            irq - io_apic.madt_io_apic.global_system_interrupt_base as u8,
+        );
     }
 
     pub fn setup_other_application_processors(
@@ -274,6 +315,210 @@ impl Apic {
                     | 0x608,
             );
             unsafe { PIT.wait_sixteen_millis() }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct IoApic {
+    madt_io_apic: MadtIoApic,
+    ioregsel: *mut u32,
+    iowin: *mut u32,
+}
+
+impl IoApic {
+    pub fn new(madt_io_apic: MadtIoApic) -> Self {
+        let ioregsel = madt_io_apic.io_apic_address as *mut u32;
+        let iowin = (madt_io_apic.io_apic_address + 0x10) as *mut u32;
+
+        unsafe {
+            if let Err(e) = memory_manager().write().map_identity(
+                &Page::new(VirtualAddress::new(madt_io_apic.io_apic_address as u64)),
+                PageFlags::WRITABLE | PageFlags::WRITE_THROUGH,
+            ) {
+                match e {
+                    MemoryError::AlreadyMapped => {}
+                    invalid => panic!("{}", invalid),
+                }
+            }
+        }
+
+        Self {
+            madt_io_apic,
+            ioregsel,
+            iowin,
+        }
+    }
+
+    pub fn redirect_interrupt(&self, redirection_entry: RedirectionEntry, irq: u8) {
+        self.write_register((0x10 + irq * 2) as u32, redirection_entry.0 as u32);
+        self.write_register(
+            (0x10 + irq * 2 + 1) as u32,
+            (redirection_entry.0 >> 32) as u32,
+        );
+    }
+
+    pub fn get_redirection_entry_count(&self) -> u32 {
+        ((self.read_register(0x01) >> 16) & 0xFF) + 1
+    }
+
+    pub fn init(&self) {
+        let id = (self.read_register(0x00) >> 24) & 0xF0;
+        let ver = self.read_register(0x01) & 0xFF;
+        let redir_entry_count = ((self.read_register(0x01) >> 16) & 0xFF) + 1;
+
+        debug!(
+            "IO APIC: ID={}, VER={}, REDIRECTION_ENTRY_COUNT={}, GSIB={}",
+            id, ver, redir_entry_count, self.madt_io_apic.global_system_interrupt_base
+        );
+    }
+
+    fn write_register(&self, register: u32, value: u32) {
+        unsafe {
+            // Select register
+            ptr::write_volatile(self.ioregsel, register);
+
+            // Write data
+            ptr::write_volatile(self.iowin, value);
+        }
+    }
+
+    fn read_register(&self, register: u32) -> u32 {
+        unsafe {
+            // Select register
+            ptr::write_volatile(self.ioregsel, register);
+
+            // Read data
+            ptr::read_volatile(self.iowin)
+        }
+    }
+}
+
+#[bitfield(u64)]
+pub struct RedirectionEntry {
+    pub interrupt_vector: u8,
+    #[bits(3)]
+    pub delivery_mode: DeliveryMode,
+    #[bits(1)]
+    pub destination_mode: DestinationMode,
+    #[bits(1)]
+    pub delivery_status: u8,
+    #[bits(1)]
+    pub pin_polarity: PinPolarity,
+    #[bits(1)]
+    pub remote_irr: u8,
+    #[bits(1)]
+    pub trigger_mode: TriggerMode,
+    pub mask: bool,
+    #[bits(39)]
+    pub reserved: u64,
+    pub destination: u8,
+}
+
+#[derive(Debug)]
+#[repr(u8)]
+pub enum DeliveryMode {
+    Fixed,
+    LowestPriority,
+    SystemManagementInterrupt,
+    NonMaskableInterrupt,
+    Initialization,
+    ExternalInitialization,
+}
+
+impl DeliveryMode {
+    const fn into_bits(self) -> u8 {
+        match self {
+            DeliveryMode::Fixed => 0b000,
+            DeliveryMode::LowestPriority => 0b001,
+            DeliveryMode::SystemManagementInterrupt => 0b010,
+            DeliveryMode::NonMaskableInterrupt => 0b100,
+            DeliveryMode::Initialization => 0b101,
+            DeliveryMode::ExternalInitialization => 0b111,
+        }
+    }
+
+    const fn from_bits(bits: u8) -> Self {
+        match bits {
+            0b000 => DeliveryMode::Fixed,
+            0b001 => DeliveryMode::LowestPriority,
+            0b010 => DeliveryMode::SystemManagementInterrupt,
+            0b100 => DeliveryMode::NonMaskableInterrupt,
+            0b101 => DeliveryMode::Initialization,
+            0b111 => DeliveryMode::ExternalInitialization,
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[derive(Debug)]
+#[repr(u8)]
+pub enum DestinationMode {
+    Physical,
+    Logical,
+}
+
+impl DestinationMode {
+    const fn into_bits(self) -> u8 {
+        match self {
+            DestinationMode::Physical => 0,
+            DestinationMode::Logical => 1,
+        }
+    }
+
+    const fn from_bits(bits: u8) -> Self {
+        match bits {
+            0 => DestinationMode::Physical,
+            1 => DestinationMode::Logical,
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[derive(Debug)]
+#[repr(u8)]
+pub enum PinPolarity {
+    ActiveHigh,
+    ActiveLow,
+}
+
+impl PinPolarity {
+    const fn into_bits(self) -> u8 {
+        match self {
+            PinPolarity::ActiveHigh => 0,
+            PinPolarity::ActiveLow => 1,
+        }
+    }
+
+    const fn from_bits(bits: u8) -> Self {
+        match bits {
+            0 => PinPolarity::ActiveHigh,
+            1 => PinPolarity::ActiveLow,
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[derive(Debug)]
+#[repr(u8)]
+pub enum TriggerMode {
+    Edge,
+    Level,
+}
+
+impl TriggerMode {
+    const fn into_bits(self) -> u8 {
+        match self {
+            TriggerMode::Edge => 0,
+            TriggerMode::Level => 1,
+        }
+    }
+
+    const fn from_bits(bits: u8) -> Self {
+        match bits {
+            0 => Self::Edge,
+            1 => Self::Level,
+            _ => unreachable!(),
         }
     }
 }
