@@ -4,3 +4,4 @@ pub mod ata;
 pub mod pci;
 pub mod pic;
 pub mod pit;
+pub mod keyboard;

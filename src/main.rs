@@ -46,6 +46,7 @@ use crate::{
     serial::SerialPort,
     vga::Vga,
 };
+use crate::driver::keyboard::KeyboardDriver;
 
 /// Sets the base revision to the latest revision supported by the crate.
 /// See specification for further info.
@@ -141,7 +142,7 @@ unsafe extern "C" fn _start() -> ! {
         apic,
         gdt: x86_64::instructions::tables::sgdt(),
         timer_irq,
-        irq_allocator: Arc::new(Mutex::new(irq_allocator)),
+        irq_allocator: Mutex::new(irq_allocator),
     }));
 
     let _pci_devices = Pci::build_device_tree();
@@ -160,6 +161,9 @@ unsafe extern "C" fn _start() -> ! {
     switch_to_post_boot_logger(serial, terminal);
 
     (*pcb).local_apic.get().unwrap().enable_timer();
+
+    let keyboard = KeyboardDriver::new(Arc::clone(&kernel));
+    keyboard.init();
 
     loop {
         asm!("hlt");

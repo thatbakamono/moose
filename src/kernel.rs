@@ -10,5 +10,5 @@ pub struct Kernel {
     pub apic: Arc<RwLock<Apic>>,
     pub gdt: DescriptorTablePointer,
     pub timer_irq: u8,
-    pub irq_allocator: Arc<Mutex<IrqAllocator>>,
+    pub irq_allocator: Mutex<IrqAllocator>,
 }
