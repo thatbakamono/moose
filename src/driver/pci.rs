@@ -35,15 +35,15 @@ impl Pci {
     }
 
     fn scan_device(bus: u32, device: u32, function: u32) -> Option<PciDevice> {
-        let vendor_id = Pci::read(bus, device, function, 0);
+        let vendor_id = Pci::read_u16(bus, device, function, 0);
         if vendor_id == 0xFFFF {
             // Device does not exist
             return None;
         }
 
-        let device_id = Pci::read(bus, device, function, 2);
-        let class_code = Pci::read(bus, device, function, 10) >> 8;
-        let subclass_code = Pci::read(bus, device, function, 10) & 0xF;
+        let device_id = Pci::read_u16(bus, device, function, 2);
+        let class_code = Pci::read_u16(bus, device, function, 10) >> 8;
+        let subclass_code = Pci::read_u16(bus, device, function, 10) & 0xF;
         let device = PciDevice {
             bus,
             device,
@@ -65,12 +65,52 @@ impl Pci {
         Some(device)
     }
 
-    fn read(bus: u32, device: u32, function: u32, offset: u32) -> u16 {
+    pub fn read_u8(bus: u32, device: u32, function: u32, offset: u32) -> u8 {
         let address: u32 =
             (bus << 16) | (device << 11) | (function << 8) | (offset & 0xFC) | 0x80000000;
         outl(CONFIG_ADDRESS, address);
 
-        return ((inl(CONFIG_DATA) >> ((offset & 2) * 8)) & 0xFFFF) as u16;
+        ((inl(CONFIG_DATA) >> ((offset & 2) * 8)) & 0xFF) as u8
+    }
+
+    pub fn read_u16(bus: u32, device: u32, function: u32, offset: u32) -> u16 {
+        let address: u32 =
+            (bus << 16) | (device << 11) | (function << 8) | (offset & 0xFC) | 0x80000000;
+        outl(CONFIG_ADDRESS, address);
+
+        ((inl(CONFIG_DATA) >> ((offset & 2) * 8)) & 0xFFFF) as u16
+    }
+
+    pub fn read_u32(bus: u32, device: u32, function: u32, offset: u32) -> u32 {
+        let address: u32 =
+            (bus << 16) | (device << 11) | (function << 8) | (offset & 0xFC) | 0x80000000;
+        outl(CONFIG_ADDRESS, address);
+
+        inl(CONFIG_DATA) >> ((offset & 2) * 8)
+    }
+
+    pub fn write_u8(bus: u32, device: u32, function: u32, offset: u32, value: u8) {
+        let address: u32 =
+            (bus << 16) | (device << 11) | (function << 8) | (offset & 0xFC) | 0x80000000;
+        outl(CONFIG_ADDRESS, address);
+
+        outl(CONFIG_DATA, value as u32);
+    }
+
+    pub fn write_u16(bus: u32, device: u32, function: u32, offset: u32, value: u16) {
+        let address: u32 =
+            (bus << 16) | (device << 11) | (function << 8) | (offset & 0xFC) | 0x80000000;
+        outl(CONFIG_ADDRESS, address);
+
+        outl(CONFIG_DATA, value as u32);
+    }
+
+    pub fn write_u32(bus: u32, device: u32, function: u32, offset: u32, value: u32) {
+        let address: u32 =
+            (bus << 16) | (device << 11) | (function << 8) | (offset & 0xFC) | 0x80000000;
+        outl(CONFIG_ADDRESS, address);
+
+        outl(CONFIG_DATA, value);
     }
 }
 

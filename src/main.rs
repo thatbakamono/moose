@@ -128,13 +128,8 @@ unsafe extern "C" fn _start() -> ! {
     let mut irq_allocator = IrqAllocator::new();
     let timer_irq = irq_allocator.allocate_irq(IrqLevel::Clock);
 
-    let acpi = Arc::new(Acpi::with_memory_manager(
-        rsdp_response.address() as *const Rsdp
-    ));
-    let apic = Arc::new(RwLock::new(Apic::initialize(
-        Arc::clone(&acpi),
-        timer_irq,
-    )));
+    let acpi = Arc::new(Acpi::from_rsdp(rsdp_response.address() as *const Rsdp));
+    let apic = Arc::new(RwLock::new(Apic::initialize(Arc::clone(&acpi), timer_irq)));
 
     let kernel = Arc::new(RwLock::new(Kernel {
         acpi,
