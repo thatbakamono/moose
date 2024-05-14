@@ -27,7 +27,7 @@ pub struct Apic {
 }
 
 impl Apic {
-    pub fn initialize(acpi: Arc<Acpi>) -> Apic {
+    pub fn initialize(acpi: Arc<Acpi>, timer_irq: u8) -> Apic {
         // Check if CPU supports APIC
         let cpuid = CpuId::new();
         assert!(
@@ -35,7 +35,7 @@ impl Apic {
             "CPU does not support APIC"
         );
 
-        unsafe { IDT[TIMER_IRQ as u8].set_handler_fn(timer_interrupt_handler) };
+        unsafe { IDT[timer_irq].set_handler_fn(timer_interrupt_handler) };
 
         let io_apics = acpi
             .madt
@@ -254,40 +254,4 @@ impl Apic {
             unsafe { PIT.wait_sixteen_millis() }
         }
     }
-}
-
-#[repr(transparent)]
-pub struct IrqId(u8);
-
-impl IrqId {
-    pub const fn new(id: u8) -> IrqId {
-        assert!(id < 0b11111, "IrqId needs to be in range [0, 31]");
-
-        Self(id)
-    }
-
-    pub const fn try_new(id: u8) -> Result<IrqId, ()> {
-        if id > 0b11111 {
-            return Err(());
-        }
-
-        Ok(Self(id))
-    }
-
-    pub const fn as_u8(&self) -> u8 {
-        self.0
-    }
-}
-
-#[repr(u8)]
-pub enum IrqLevel {
-    High = 15,
-    InterProcessorInterrupt = 14,
-    Clock = 13,
-    // 12-1 are free, probably for device drivers use
-    Passive = 0,
-}
-
-pub const fn to_irq_number(level: IrqLevel, id: IrqId) -> u8 {
-    ((level as u8) << 5) | (id.as_u8())
 }
