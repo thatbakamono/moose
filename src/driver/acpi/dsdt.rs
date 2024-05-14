@@ -1,4 +1,4 @@
-use alloc::{format, vec, vec::Vec};
+use alloc::{format, vec::Vec};
 use deku::{
     bitvec::{BitSlice, Msb0},
     DekuError, DekuRead,
