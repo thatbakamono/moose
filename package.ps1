@@ -37,7 +37,7 @@ else {
 }
 
 if (Test-Path -Path moose.iso) {
-    $buildLastWriteTime = (Get-Item target/x86_64-moose/$mode/moose).LastWriteTime
+    $buildLastWriteTime = (Get-Item target/x86_64-moose/$mode/kernel).LastWriteTime
     $isoLastWriteTime = (Get-Item moose.iso).LastWriteTime
 
     if ($buildLastWriteTime -ge $isoLastWriteTime) {
