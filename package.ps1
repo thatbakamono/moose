@@ -30,10 +30,10 @@ if (-not (Test-Path -Path limine)) {
 }
 
 if ($release) {
-    cargo build -r
+    cargo build -p kernel -r
 }
 else {
-    cargo build
+    cargo build -p kernel
 }
 
 if (Test-Path -Path moose.iso) {
