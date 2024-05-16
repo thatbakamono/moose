@@ -1,7 +1,5 @@
 #![allow(dead_code)]
-#![feature(abi_x86_interrupt)]
-#![feature(allocator_api)]
-#![feature(strict_provenance)]
+#![feature(abi_x86_interrupt, allocator_api, strict_provenance)]
 #![no_std]
 #![no_main]
 
