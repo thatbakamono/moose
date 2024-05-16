@@ -28,6 +28,7 @@ use core::arch::asm;
 use limine::paging::Mode;
 use limine::request::{
     FramebufferRequest, HhdmRequest, MemoryMapRequest, PagingModeRequest, RsdpRequest,
+    StackSizeRequest,
 };
 use limine::BaseRevision;
 use log::{error, info};
@@ -68,9 +69,13 @@ static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
 #[used]
 static RSDP_REQUEST: RsdpRequest = RsdpRequest::new();
 
+#[used]
+static STACK_SIZE_REQUEST: StackSizeRequest = StackSizeRequest::new().with_size(4 * 1024 * 1024); // 4 MiB
+
 #[no_mangle]
 unsafe extern "C" fn _start() -> ! {
     assert!(BASE_REVISION.is_supported());
+    assert!(STACK_SIZE_REQUEST.get_response().is_some());
 
     Efer::write(Efer::read() | EferFlags::NO_EXECUTE_ENABLE);
     Cr4::write(Cr4::read() | Cr4Flags::PAGE_GLOBAL | Cr4Flags::FSGSBASE);
