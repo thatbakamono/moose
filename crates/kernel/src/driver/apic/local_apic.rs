@@ -83,7 +83,7 @@ impl LocalApic {
             let mut memory_manager = memory_manager().write();
 
             match unsafe {
-                memory_manager.map_identity(
+                memory_manager.map_identity_for_current_address_space(
                     &Page::new(VirtualAddress::new(local_apic_base)),
                     PageFlags::WRITABLE | PageFlags::WRITE_THROUGH | PageFlags::DISABLE_CACHING,
                 )

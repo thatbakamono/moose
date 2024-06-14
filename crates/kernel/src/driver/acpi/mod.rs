@@ -92,7 +92,7 @@ impl Acpi {
             let mut memory_manager = memory_manager().write();
 
             unsafe {
-                memory_manager.map(
+                memory_manager.map_for_current_address_space(
                     &Page::new(VirtualAddress::new(rsdt_address & 0xFFFF_FFFF_F000)),
                     &Frame::new(PhysicalAddress::new(rsdt_address & 0xFFFF_FFFF_F000)),
                     PageFlags::empty(),
@@ -121,7 +121,7 @@ impl Acpi {
             // Map table into memory
             unsafe {
                 let page_number = pointer_to_entry_header as u64 & PAGE_NUMBER_MASK;
-                match memory_manager().write().map(
+                match memory_manager().write().map_for_current_address_space(
                     &Page::new(VirtualAddress::new(page_number)),
                     &Frame::new(PhysicalAddress::new(page_number)),
                     PageFlags::empty(),
@@ -168,7 +168,7 @@ impl Acpi {
 
                 // Map table into memory
                 match unsafe {
-                    memory_manager.map(
+                    memory_manager.map_for_current_address_space(
                         &Page::new(VirtualAddress::new(page_number)),
                         &Frame::new(PhysicalAddress::new(page_number)),
                         PageFlags::empty(),
@@ -212,14 +212,14 @@ impl Acpi {
 
             unsafe {
                 memory_manager
-                    .map_identity(
+                    .map_identity_for_current_address_space(
                         &Page::new(VirtualAddress::new(0xFED00000)),
                         PageFlags::WRITABLE | PageFlags::WRITE_THROUGH | PageFlags::DISABLE_CACHING,
                     )
                     .unwrap();
 
                 memory_manager
-                    .map_identity(
+                    .map_identity_for_current_address_space(
                         &Page::new(VirtualAddress::new(0xFED80000)),
                         PageFlags::WRITABLE | PageFlags::WRITE_THROUGH | PageFlags::DISABLE_CACHING,
                     )
