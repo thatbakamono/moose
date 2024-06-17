@@ -1,0 +1,21 @@
+[package]
+name = "fs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bitflags = "2.5.0"
+bitfield-struct = "0.6.1"
+bytemuck = { version = "1.16.0", features = ["derive"] }
+chrono = { version = "0.4.38", default-features = false, features = ["alloc", "clock"] }
+deku = { version = "0.16.0", default-features = false, features = ["alloc", "const_generics"] }
+libm = "0.2.8"
+log = "0.4.21"
+spin = { version = "0.9.8", optional = true }
+snafu = { version = "0.8.2", default-features = false, features = ["rust_1_61", "rust_1_65", "unstable-core-error"] }
+pretty-hex = "0.4.1"
+ucs2 = "0.3.3"
+bitvec = { version = "1.0.1", default-features = false, features = ["alloc", "atomic"] }
+
+[features]
+no_std = ["spin"]
