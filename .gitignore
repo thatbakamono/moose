@@ -1,4 +1,4 @@
-/kernel/target/
+target/
 
 /kernel/limine/
 /kernel/iso_root/
