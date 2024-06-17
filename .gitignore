@@ -1,5 +1,5 @@
-/target
+/kernel/target
 
-/limine/
-/iso_root/
-moose.iso
+/kernel/limine/
+/kernel/iso_root/
+/kernel/moose.img
