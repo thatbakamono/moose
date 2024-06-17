@@ -1,0 +1,441 @@
+use crate::arch::x86::asm::{inb, inw, outb, outl};
+use crate::driver::pci::PciDevice;
+use crate::memory::{memory_manager, VirtualAddress};
+use alloc::borrow::ToOwned;
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use alloc::{format, vec};
+use core::mem::transmute;
+use deku::bitvec::{BitSlice, Msb0};
+use deku::{DekuError, DekuRead};
+use log::debug;
+use spin::Mutex;
+
+const ATA_PRIMARY_IO_PORT: u16 = 0x1F0;
+const ATA_SECONDARY_IO_PORT: u16 = 0x170;
+const ATA_PRIMARY_IRQ: u32 = 14;
+const ATA_SECONDARY_IRQ: u32 = 15;
+
+const ATA_SECTOR_SIZE: u32 = 512;
+const ATA_CAPABILITY_DMA_LBA: u16 = 1 << 9;
+const ATA_PRD_MARK_END: u16 = 0x8000;
+
+// Disks
+const ATA_MASTER: u8 = 0;
+const ATA_SLAVE: u8 = 1;
+
+// Channels
+const ATA_PRIMARY: u8 = 0;
+const ATA_SECONDARY: u8 = 1;
+
+// Registers
+const ATA_REG_DATA: u16 = 0x0;
+const ATA_REG_ERROR: u16 = 0x1;
+const ATA_REG_SECCOUNT0: u16 = 0x2;
+const ATA_REG_LBA0: u16 = 0x3;
+const ATA_REG_LBA1: u16 = 0x4;
+const ATA_REG_LBA2: u16 = 0x5;
+const ATA_REG_HDDEVSEL: u16 = 0x6;
+const ATA_REG_COMMAND: u16 = 0x7;
+const ATA_REG_STATUS: u16 = 0x7;
+const ATA_REG_SECCOUNT1: u16 = 0x8;
+const ATA_REG_LBA3: u16 = 0x9;
+const ATA_REG_LBA4: u16 = 0xA;
+const ATA_REG_LBA5: u16 = 0xB;
+const ATA_REG_CONTROL: u16 = 0xC;
+const ATA_REG_ALTSTATUS: u16 = 0xC;
+const ATA_REG_DEVADDRESS: u16 = 0xD;
+
+// Command/Status Port bits
+// Error
+const ATA_SR_ERR: u8 = 0x01;
+// Index
+const ATA_SR_IDX: u8 = 0x02;
+// Corrected data
+const ATA_SR_CORR: u8 = 0x04;
+// Data request ready
+const ATA_SR_DRQ: u8 = 0x08;
+// Drive seek complete
+const ATA_SR_DSC: u8 = 0x10;
+// Drive write fault
+const ATA_SR_DF: u8 = 0x20;
+// Drive ready
+const ATA_SR_DRDY: u8 = 0x40;
+// Busy
+const ATA_SR_BSY: u8 = 0x80;
+
+// Commands
+const ATA_CMD_READ_PIO: u8 = 0x20;
+const ATA_CMD_READ_PIO_EXT: u8 = 0x24;
+const ATA_CMD_READ_DMA: u8 = 0xC8;
+const ATA_CMD_READ_DMA_EXT: u8 = 0x25;
+const ATA_CMD_WRITE_PIO: u8 = 0x30;
+const ATA_CMD_WRITE_PIO_EXT: u8 = 0x34;
+const ATA_CMD_WRITE_DMA: u8 = 0xCA;
+const ATA_CMD_WRITE_DMA_EXT: u8 = 0x35;
+const ATA_CMD_CACHE_FLUSH: u8 = 0xE7;
+const ATA_CMD_CACHE_FLUSH_EXT: u8 = 0xEA;
+const ATA_CMD_PACKET: u8 = 0xA0;
+const ATA_CMD_IDENTIFY_PACKET: u8 = 0xA1;
+const ATA_CMD_IDENTIFY: u8 = 0xEC;
+
+pub type Sector = [u8; ATA_SECTOR_SIZE as usize];
+
+#[repr(C, packed)]
+struct PhysicalRegionDescriptor {
+    buffer_physical_address: u32,
+    transfer_size: u16,
+    mark_end: u16,
+}
+
+pub struct AtaDrive {
+    bus: u8,
+    drive: u8,
+    pci_device: Arc<Mutex<PciDevice>>,
+    size_in_sectors: u32,
+}
+
+impl AtaDrive {
+    pub fn read_sectors(&self, starting_sector_lba: u32, n: u32) -> Vec<Sector> {
+        assert!(starting_sector_lba < self.size_in_sectors);
+        assert!(starting_sector_lba + n < self.size_in_sectors);
+
+        // Need to hold this lock until DMA transfer completes because ATA is not thread safe
+        let device_lock = self.pci_device.lock();
+
+        // Get BMR command register from PCI configuration space BAR4
+        let mut bmr_command_register = device_lock.get_bar(4) as u16;
+
+        // Lowest bit tells us whether it's MemorySpace BAR or I/O Space Bar
+        assert_eq!(
+            bmr_command_register & 0x1,
+            1,
+            "We don't support memory-mapped I/O registers"
+        );
+
+        // Cut information bit from register address
+        bmr_command_register &= 0xfffc;
+
+        let bmr_status_register = bmr_command_register + 2;
+        let bmr_prdt_register = bmr_command_register + 4;
+
+        // Allocate data buffer
+        let buffer: Vec<Sector> = vec![[0u8; ATA_SECTOR_SIZE as usize]; n as usize];
+
+        // Allocate Physical Region Descriptor for data transfer
+        let mut prd = Box::new(PhysicalRegionDescriptor {
+            // We'll fill it later
+            buffer_physical_address: 0,
+            transfer_size: (n * ATA_SECTOR_SIZE) as u16,
+            mark_end: ATA_PRD_MARK_END,
+        });
+
+        // Convert virtual addresses to physical addresses
+        let prd_pointer = &mut *prd as *mut PhysicalRegionDescriptor;
+        let prd_physical_address = memory_manager()
+            .read()
+            .translate_virtual_address_to_physical(VirtualAddress::new(prd_pointer.addr() as u64))
+            .unwrap()
+            .as_u64() as u32;
+        let buffer_physical_address = memory_manager()
+            .read()
+            .translate_virtual_address_to_physical(VirtualAddress::new(
+                buffer.as_ptr().addr() as u64
+            ))
+            .unwrap()
+            .as_u64() as u32;
+
+        prd.buffer_physical_address = buffer_physical_address;
+
+        // Select drive
+        //
+        // We can do that because we don't support LBA48 (yet)
+        // @TODO: Add support for LBA48
+        self.select_drive();
+
+        // Reset BMR command register
+        outb(bmr_command_register, 0);
+
+        // Clear interrupt and error bits in status register
+        // This is weird register, because we clear bits by issuing write with these bits set.
+        outb(bmr_status_register, inb(bmr_status_register) | 0x2 | 0x4);
+
+        // Set PRDT entry
+        outl(bmr_prdt_register, prd_physical_address);
+
+        // Set DMA in read mode
+        outb(bmr_command_register, 0x8);
+
+        self.io_wait();
+
+        // Allow ATA interrupts
+        outb(self.get_io_base() + ATA_REG_ALTSTATUS, 0);
+
+        // Set feature/error register to 0
+        outb(self.get_io_base() + ATA_REG_ERROR, 0);
+
+        // Set sector count and LBA
+        outb(self.get_io_base() + ATA_REG_SECCOUNT0, n as u8);
+        outb(self.get_io_base() + ATA_REG_LBA0, starting_sector_lba as u8);
+        outb(
+            self.get_io_base() + ATA_REG_LBA1,
+            (starting_sector_lba >> 8) as u8,
+        );
+        outb(
+            self.get_io_base() + ATA_REG_LBA2,
+            (starting_sector_lba >> 16) as u8,
+        );
+
+        // Write the READ DMA to the command register
+        outb(self.get_io_base() + ATA_REG_COMMAND, ATA_CMD_READ_DMA);
+
+        // Start DMA reading
+        outb(bmr_command_register, 0x8 | 0x1);
+
+        // @TODO: Interrupts instead of polling
+        loop {
+            let status = inb(self.get_io_base() + ATA_REG_STATUS);
+
+            if status & ATA_SR_BSY == 0 && status & ATA_SR_DRQ != 0 {
+                break;
+            }
+        }
+
+        buffer
+    }
+
+    pub fn write_sectors(&self, starting_sector_lba: u32, data: &[Sector]) {
+        assert!(starting_sector_lba < self.size_in_sectors);
+        assert!((starting_sector_lba + data.len() as u32) < self.size_in_sectors);
+
+        // Need to hold this lock until DMA transfer completes because ATA is not thread safe
+        let device_lock = self.pci_device.lock();
+
+        // Get BMR command register from PCI configuration space BAR4
+        let mut bmr_command_register = device_lock.get_bar(4) as u16;
+
+        // Lowest bit tells us whether it's MemorySpace BAR or I/O Space Bar
+        assert_eq!(
+            bmr_command_register & 0x1,
+            1,
+            "We don't support memory-mapped I/O registers"
+        );
+
+        // Cut information bit from register address
+        bmr_command_register &= 0xfffc;
+
+        let bmr_prdt_register = bmr_command_register + 4;
+
+        // Allocate Physical Region Descriptor for data transfer
+        let mut prd = Box::new(PhysicalRegionDescriptor {
+            // We'll fill it later
+            buffer_physical_address: 0,
+            transfer_size: (data.len() as u32 * ATA_SECTOR_SIZE) as u16,
+            mark_end: ATA_PRD_MARK_END,
+        });
+
+        // Convert virtual addresses to physical addresses
+        let prd_pointer = &mut *prd as *mut PhysicalRegionDescriptor;
+        let prd_physical_address = memory_manager()
+            .read()
+            .translate_virtual_address_to_physical(VirtualAddress::new(prd_pointer.addr() as u64))
+            .unwrap()
+            .as_u64() as u32;
+        let buffer_physical_address = memory_manager()
+            .read()
+            .translate_virtual_address_to_physical(VirtualAddress::new(data.as_ptr().addr() as u64))
+            .unwrap()
+            .as_u64() as u32;
+
+        prd.buffer_physical_address = buffer_physical_address;
+
+        // Select drive
+        //
+        // We can do that because we don't support LBA48 (yet)
+        // @TODO: Add support for LBA48
+        self.select_drive();
+
+        // Reset BMR command register
+        outb(bmr_command_register, 0);
+
+        // Set PRDT entry
+        outl(bmr_prdt_register, prd_physical_address);
+
+        // Set sector count and LBA
+        outb(self.get_io_base() + ATA_REG_SECCOUNT0, data.len() as u8);
+        outb(self.get_io_base() + ATA_REG_LBA0, starting_sector_lba as u8);
+        outb(
+            self.get_io_base() + ATA_REG_LBA1,
+            (starting_sector_lba >> 8) as u8,
+        );
+        outb(
+            self.get_io_base() + ATA_REG_LBA2,
+            (starting_sector_lba >> 16) as u8,
+        );
+
+        // Write the READ DMA to the command register
+        outb(self.get_io_base() + ATA_REG_COMMAND, ATA_CMD_WRITE_DMA);
+
+        // Start DMA reading
+        outb(bmr_command_register, 0x1);
+
+        // @TODO: Interrupts instead of polling
+        loop {
+            let status = inb(self.get_io_base() + ATA_REG_STATUS);
+
+            if status & ATA_SR_BSY == 0 && status & ATA_SR_DRQ != 0 {
+                break;
+            }
+        }
+    }
+
+    fn io_wait(&self) {
+        // Every I/O read from this port takes ~100ns and specification say we should wait
+        // ~400ns between resets
+        for _ in 0..4 {
+            _ = inb(0x3F6);
+        }
+    }
+    fn select_drive(&self) {
+        // 0x40 because we need LBA bit set
+        outb(
+            self.get_io_base() + ATA_REG_HDDEVSEL,
+            0x40 | (self.drive << 4),
+        );
+    }
+
+    fn get_io_base(&self) -> u16 {
+        match self.bus {
+            ATA_PRIMARY => ATA_PRIMARY_IO_PORT,
+            ATA_SECONDARY => ATA_SECONDARY_IO_PORT,
+            _ => unreachable!(),
+        }
+    }
+}
+
+pub struct Ata;
+
+impl Ata {
+    pub fn perform_disk_discovery(pci_device: Arc<Mutex<PciDevice>>) -> Vec<AtaDrive> {
+        let mut disks = vec![];
+
+        for bus in [ATA_PRIMARY, ATA_SECONDARY] {
+            for drive in [ATA_MASTER, ATA_SLAVE] {
+                if let Some(disk) = Self::check_disk(bus, drive, pci_device.clone()) {
+                    disks.push(disk);
+                }
+            }
+        }
+
+        disks
+    }
+
+    fn check_disk(bus: u8, drive: u8, pci_device: Arc<Mutex<PciDevice>>) -> Option<AtaDrive> {
+        let io_base = match bus {
+            ATA_PRIMARY => ATA_PRIMARY_IO_PORT,
+            ATA_SECONDARY => ATA_SECONDARY_IO_PORT,
+            _ => unreachable!(),
+        };
+
+        // Select disk
+        outb(
+            io_base + ATA_REG_HDDEVSEL,
+            match drive {
+                ATA_MASTER => 0xA0,
+                ATA_SLAVE => 0xB0,
+                _ => unreachable!(),
+            },
+        );
+
+        // Zero some registers
+        outb(io_base + ATA_REG_SECCOUNT0, 0);
+        outb(io_base + ATA_REG_LBA0, 0);
+        outb(io_base + ATA_REG_LBA1, 0);
+        outb(io_base + ATA_REG_LBA2, 0);
+
+        // Send IDENTIFY command
+        outb(io_base + ATA_REG_COMMAND, ATA_CMD_IDENTIFY);
+
+        // Check if drive exists
+        if inb(io_base + ATA_REG_STATUS) == 0 {
+            debug!("Disk offline");
+            return None;
+        }
+
+        // Poll until BSY bit clears
+        while (inb(io_base + ATA_REG_STATUS) & ATA_SR_BSY) != 0 {}
+
+        // Read IDENTITY command response (it's not possible using DMA so need to use PIO mode)
+        let mut identify_response = [0u16; (ATA_SECTOR_SIZE / 2) as usize];
+        for i in 0..(ATA_SECTOR_SIZE / 2) as usize {
+            identify_response[i] = inw(io_base + ATA_REG_DATA);
+        }
+
+        let identify_response_as_bytes: [u8; 512] = unsafe { transmute(identify_response) };
+        let parsed_identify_response =
+            AtaIdentityResponse::try_from(identify_response_as_bytes.as_slice()).unwrap();
+
+        // We don't support disks without DMA or LBA addressing (LBA can be easily converted to CHS,
+        // but reading using PIO mode is so slow)
+        if parsed_identify_response.capabilities & ATA_CAPABILITY_DMA_LBA == 0 {
+            return None;
+        }
+
+        // Enable Bus Mastering for IDE Controller (Bus Mastering is DMA for PCI)
+        pci_device.lock().enable_dma();
+
+        debug!("Disk online, info: {:#?}", parsed_identify_response);
+
+        Some(AtaDrive {
+            bus,
+            drive,
+            pci_device,
+            size_in_sectors: parsed_identify_response.capacity,
+        })
+    }
+}
+
+// We don't really care about all reported fields and options
+#[derive(DekuRead, Debug)]
+struct AtaIdentityResponse {
+    #[deku(
+        pad_bytes_before = "52",
+        reader = "AtaIdentityResponse::read_model_number(deku::rest)"
+    )]
+    _model_number: String,
+    #[deku(pad_bytes_before = "6")]
+    capabilities: u16,
+    #[deku(pad_bytes_before = "14", pad_bytes_after = "394")]
+    capacity: u32,
+}
+
+impl AtaIdentityResponse {
+    fn read_model_number(
+        rest: &BitSlice<u8, Msb0>,
+    ) -> Result<(&BitSlice<u8, Msb0>, String), DekuError> {
+        let mut buffer = [0u8; 40];
+        let mut remaining_slice = rest;
+
+        // ATA reports model number in some cringe format with swapped bytes, so we need to
+        // "unswap" it to make it a "real" string
+        for i in 0..20 {
+            let higher_byte;
+            let lower_byte;
+
+            (remaining_slice, higher_byte) = u8::read(remaining_slice, ())?;
+            (remaining_slice, lower_byte) = u8::read(remaining_slice, ())?;
+
+            buffer[i * 2] = lower_byte;
+            buffer[i * 2 + 1] = higher_byte;
+        }
+
+        let string = String::from_utf8_lossy(&buffer)
+            .trim_start()
+            .trim_end()
+            .to_owned();
+
+        Ok((remaining_slice, string))
+    }
+}

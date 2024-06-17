@@ -27,4 +27,6 @@ jobs:
       uses: ilammy/setup-nasm@v1
 
     - name: Build
-      run: cargo build --verbose
+      run: |
+        cd kernel
+        cargo build --verbose
