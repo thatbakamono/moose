@@ -86,7 +86,7 @@ impl Apic {
             let mut memory_manager = memory_manager().write();
 
             memory_manager
-                .map_identity(
+                .map_identity_for_current_address_space(
                     &Page::new(VirtualAddress::new(0x8000)),
                     PageFlags::WRITABLE | PageFlags::EXECUTABLE,
                 )

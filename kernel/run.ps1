@@ -24,7 +24,7 @@ if ($logs) {
 [void]$command.Append('-netdev tap,id=n1,ifname=tap ')
 [void]$command.Append('-device rtl8139,netdev=n1 ')
 
-[void]$command.Append('-drive file=moose.img,format=raw,if=ide ')
+[void]$command.Append('-drive file=moose.iso,format=raw,if=ide ')
 [void]$command.Append('-drive file=fat.img,format=raw ')
 [void]$command.Append('-serial stdio ')
 

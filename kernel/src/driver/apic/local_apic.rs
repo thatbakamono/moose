@@ -1,4 +1,5 @@
 use crate::arch::x86::idt::IDT;
+use crate::arch::x86::use_kernel_page_table;
 use crate::cpu::ProcessorControlBlock;
 use crate::driver::pit::PIT;
 use crate::kernel::Kernel;
@@ -83,7 +84,7 @@ impl LocalApic {
             let mut memory_manager = memory_manager().write();
 
             match unsafe {
-                memory_manager.map_identity(
+                memory_manager.map_identity_for_current_address_space(
                     &Page::new(VirtualAddress::new(local_apic_base)),
                     PageFlags::WRITABLE | PageFlags::WRITE_THROUGH | PageFlags::DISABLE_CACHING,
                 )
@@ -196,12 +197,14 @@ impl LocalApic {
     }
 }
 
-pub(crate) fn timer_interrupt_handler(_interrupt_stack_frame: &InterruptStackFrame) {
-    unsafe {
+pub extern "x86-interrupt" fn timer_interrupt_handler(
+    _interrupt_stack_frame: &InterruptStackFrame,
+) {
+    use_kernel_page_table(|| unsafe {
         _ = &(*ProcessorControlBlock::get_pcb_for_current_processor())
             .local_apic
             .get()
             .unwrap()
             .signal_end_of_interrupt();
-    }
+    });
 }

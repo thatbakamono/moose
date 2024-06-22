@@ -140,6 +140,26 @@ flags:
 ;   data
     .reserved equ 1 << 5
 
+struc TSSEntry
+    .reserved1 resd 1
+    .rsp0 resq 1
+    .rsp1 resq 1
+    .rsp2 resq 1
+    .reserved2 resd 1
+    .reserved3 resd 1
+    .ist1 resq 1
+    .ist2 resq 1
+    .ist3 resq 1
+    .ist4 resq 1
+    .ist5 resq 1
+    .ist6 resq 1
+    .ist7 resq 1
+    .reserved4 resd 1
+    .reserved5 resd 1
+    .reserved6 resw 1
+    .iopb resw 1
+endstruc
+
 gdtr:
     dw gdt.end + 1  ; size
     dq gdt          ; offset
@@ -165,6 +185,27 @@ istruc GDTEntry
     at GDTEntry.basem, db 0
 ; AMD System Programming Manual states that the writeable bit is ignored in long mode, but ss can not be set to this descriptor without it
     at GDTEntry.attribute, db attrib.present | attrib.user | attrib.writable | attrib.accessed
+    at GDTEntry.flags__limith, db 0
+    at GDTEntry.baseh, db 0
+iend
+
+.user_code equ $ - gdt
+istruc GDTEntry
+    at GDTEntry.limitl, dw 0
+    at GDTEntry.basel, dw 0
+    at GDTEntry.basem, db 0
+    at GDTEntry.attribute, db attrib.present | attrib.user | attrib.ring3 | attrib.readable | attrib.code | attrib.accessed
+    at GDTEntry.flags__limith, db flags.long_mode
+    at GDTEntry.baseh, db 0
+iend
+
+.user_data equ $ - gdt
+istruc GDTEntry
+    at GDTEntry.limitl, dw 0
+    at GDTEntry.basel, dw 0
+    at GDTEntry.basem, db 0
+; AMD System Programming Manual states that the writeable bit is ignored in long mode, but ss can not be set to this descriptor without it
+    at GDTEntry.attribute, db attrib.present | attrib.user | attrib.ring3 | attrib.writable | attrib.accessed
     at GDTEntry.flags__limith, db 0
     at GDTEntry.baseh, db 0
 iend
