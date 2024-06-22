@@ -1,8 +1,13 @@
 use log::{error, info, warn};
 use x86_64::{
     registers::control::Cr2,
-    structures::idt::{Entry, InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode},
+    structures::{
+        gdt::SegmentSelector,
+        idt::{Entry, InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode},
+    },
 };
+
+use super::use_kernel_page_table;
 
 pub static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 
@@ -49,8 +54,18 @@ pub fn init_idt() {
         // Reserved
         // FPU error interrupt
 
+        IDT[0x80] = Entry::missing();
+        IDT[0x80]
+            .set_handler_fn(syscall_handler)
+            .set_code_selector(SegmentSelector::new(5, x86_64::PrivilegeLevel::Ring0))
+            .set_privilege_level(x86_64::PrivilegeLevel::Ring3);
+
         // @TODO: CPU Exception handling?
         for i in 32..=255 {
+            if i == 0x80 {
+                continue;
+            }
+
             IDT[i] = Entry::missing();
 
             // set_handler_fn sets the PRESENT bit in IDT entry
@@ -62,9 +77,11 @@ pub fn init_idt() {
 }
 
 extern "x86-interrupt" fn division_error_handler(interrupt_stack_frame: InterruptStackFrame) {
-    warn!("Division error");
+    use_kernel_page_table(|| {
+        warn!("Division error");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+    });
 
     loop {
         x86_64::instructions::hlt();
@@ -72,29 +89,37 @@ extern "x86-interrupt" fn division_error_handler(interrupt_stack_frame: Interrup
 }
 
 extern "x86-interrupt" fn debug_handler(interrupt_stack_frame: InterruptStackFrame) {
-    info!("Debug");
+    use_kernel_page_table(|| {
+        info!("Debug");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+    });
 }
 
 extern "x86-interrupt" fn non_maskable_interrupt_handler(
     interrupt_stack_frame: InterruptStackFrame,
 ) {
-    info!("Non-maskable interrupt");
+    use_kernel_page_table(|| {
+        info!("Non-maskable interrupt");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+    });
 }
 
 extern "x86-interrupt" fn breakpoint_handler(interrupt_stack_frame: InterruptStackFrame) {
-    info!("Breakpoint");
+    use_kernel_page_table(|| {
+        info!("Breakpoint");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+    });
 }
 
 extern "x86-interrupt" fn overflow_handler(interrupt_stack_frame: InterruptStackFrame) {
-    warn!("Overflow");
+    use_kernel_page_table(|| {
+        warn!("Overflow");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+    });
 
     loop {
         x86_64::instructions::hlt();
@@ -102,9 +127,11 @@ extern "x86-interrupt" fn overflow_handler(interrupt_stack_frame: InterruptStack
 }
 
 extern "x86-interrupt" fn bound_range_exceeded_handler(interrupt_stack_frame: InterruptStackFrame) {
-    warn!("Bound range exceeded");
+    use_kernel_page_table(|| {
+        warn!("Bound range exceeded");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+    });
 
     loop {
         x86_64::instructions::hlt();
@@ -112,9 +139,11 @@ extern "x86-interrupt" fn bound_range_exceeded_handler(interrupt_stack_frame: In
 }
 
 extern "x86-interrupt" fn invalid_opcode_handler(interrupt_stack_frame: InterruptStackFrame) {
-    warn!("Invalid opcode");
+    use_kernel_page_table(|| {
+        warn!("Invalid opcode");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+    });
 
     loop {
         x86_64::instructions::hlt();
@@ -122,9 +151,11 @@ extern "x86-interrupt" fn invalid_opcode_handler(interrupt_stack_frame: Interrup
 }
 
 extern "x86-interrupt" fn device_not_available_handler(interrupt_stack_frame: InterruptStackFrame) {
-    warn!("Device not available");
+    use_kernel_page_table(|| {
+        warn!("Device not available");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+    });
 
     loop {
         x86_64::instructions::hlt();
@@ -135,10 +166,12 @@ extern "x86-interrupt" fn double_fault_handler(
     interrupt_stack_frame: InterruptStackFrame,
     error_code: u64,
 ) -> ! {
-    error!("Double fault");
+    use_kernel_page_table(|| {
+        error!("Double fault");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
-    info!("Error code: {error_code}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Error code: {error_code}");
+    });
 
     loop {
         x86_64::instructions::hlt();
@@ -149,10 +182,12 @@ extern "x86-interrupt" fn invalid_tss_handler(
     interrupt_stack_frame: InterruptStackFrame,
     error_code: u64,
 ) {
-    warn!("Invalid TSS");
+    use_kernel_page_table(|| {
+        warn!("Invalid TSS");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
-    info!("Error code: {error_code}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Error code: {error_code}");
+    });
 
     loop {
         x86_64::instructions::hlt();
@@ -163,10 +198,12 @@ extern "x86-interrupt" fn segment_not_present_handler(
     interrupt_stack_frame: InterruptStackFrame,
     error_code: u64,
 ) {
-    warn!("Segment not present");
+    use_kernel_page_table(|| {
+        warn!("Segment not present");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
-    info!("Error code: {error_code}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Error code: {error_code}");
+    });
 
     loop {
         x86_64::instructions::hlt();
@@ -177,10 +214,12 @@ extern "x86-interrupt" fn stack_segment_fault_handler(
     interrupt_stack_frame: InterruptStackFrame,
     error_code: u64,
 ) {
-    warn!("Stack segment fault");
+    use_kernel_page_table(|| {
+        warn!("Stack segment fault");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
-    info!("Error code: {error_code}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Error code: {error_code}");
+    });
 
     loop {
         x86_64::instructions::hlt();
@@ -191,10 +230,17 @@ extern "x86-interrupt" fn general_protection_fault_handler(
     interrupt_stack_frame: InterruptStackFrame,
     error_code: u64,
 ) {
-    warn!("General protection fault");
+    use_kernel_page_table(|| {
+        warn!("General protection fault");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
-    info!("Error code: {error_code}");
+        info!("Stack frame: {interrupt_stack_frame:#?}");
+
+        if error_code != 0 {
+            info!("Is external: {}", error_code & 1 == 1);
+            info!("GDT/IDT/LDT/IDT: {}", (error_code >> 1) & 0b11);
+            info!("Segment selector index: {}", error_code >> 3);
+        }
+    });
 
     loop {
         x86_64::instructions::hlt();
@@ -205,16 +251,18 @@ extern "x86-interrupt" fn page_fault_handler(
     interrupt_stack_frame: InterruptStackFrame,
     error_code: PageFaultErrorCode,
 ) {
-    error!("Page fault");
+    use_kernel_page_table(|| {
+        error!("Page fault");
 
-    if let Ok(address) = Cr2::read() {
-        error!("Accessed virtual address: {:#0x}", address.as_u64());
-    } else {
-        error!("Accessed unknown virtual address");
-    }
+        if let Ok(address) = Cr2::read() {
+            error!("Accessed virtual address: {:#0x}", address.as_u64());
+        } else {
+            error!("Accessed unknown virtual address");
+        }
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
-    info!("Error code: {error_code:?}");
+        info!("Stack frame: {interrupt_stack_frame:#?}");
+        info!("Error code: {error_code:?}");
+    });
 
     loop {
         x86_64::instructions::hlt();
@@ -224,9 +272,11 @@ extern "x86-interrupt" fn page_fault_handler(
 extern "x86-interrupt" fn x87_floating_point_exception_handler(
     interrupt_stack_frame: InterruptStackFrame,
 ) {
-    warn!("x87 floating point exception");
+    use_kernel_page_table(|| {
+        warn!("x87 floating point exception");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+    });
 
     loop {
         x86_64::instructions::hlt();
@@ -237,10 +287,12 @@ extern "x86-interrupt" fn alignment_check_handler(
     interrupt_stack_frame: InterruptStackFrame,
     error_code: u64,
 ) {
-    warn!("Alignment check");
+    use_kernel_page_table(|| {
+        warn!("Alignment check");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
-    info!("Error code: {error_code}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Error code: {error_code}");
+    });
 
     loop {
         x86_64::instructions::hlt();
@@ -248,9 +300,11 @@ extern "x86-interrupt" fn alignment_check_handler(
 }
 
 extern "x86-interrupt" fn machine_check_handler(interrupt_stack_frame: InterruptStackFrame) -> ! {
-    warn!("Machine check");
+    use_kernel_page_table(|| {
+        warn!("Machine check");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+    });
 
     loop {
         x86_64::instructions::hlt();
@@ -260,9 +314,11 @@ extern "x86-interrupt" fn machine_check_handler(interrupt_stack_frame: Interrupt
 extern "x86-interrupt" fn simd_floating_point_exception_handler(
     interrupt_stack_frame: InterruptStackFrame,
 ) {
-    warn!("SIMD floating point exception");
+    use_kernel_page_table(|| {
+        warn!("SIMD floating point exception");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+    });
 
     loop {
         x86_64::instructions::hlt();
@@ -272,9 +328,11 @@ extern "x86-interrupt" fn simd_floating_point_exception_handler(
 extern "x86-interrupt" fn virtualization_exception_handler(
     interrupt_stack_frame: InterruptStackFrame,
 ) {
-    warn!("Virtualization exception");
+    use_kernel_page_table(|| {
+        warn!("Virtualization exception");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+    });
 
     loop {
         x86_64::instructions::hlt();
@@ -285,10 +343,12 @@ extern "x86-interrupt" fn control_protection_exception_handler(
     interrupt_stack_frame: InterruptStackFrame,
     error_code: u64,
 ) {
-    warn!("Control protection exception");
+    use_kernel_page_table(|| {
+        warn!("Control protection exception");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
-    info!("Error code: {error_code}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Error code: {error_code}");
+    });
 
     loop {
         x86_64::instructions::hlt();
@@ -299,10 +359,12 @@ extern "x86-interrupt" fn vmm_communication_exception_handler(
     interrupt_stack_frame: InterruptStackFrame,
     error_code: u64,
 ) {
-    warn!("VMM communication exception");
+    use_kernel_page_table(|| {
+        warn!("VMM communication exception");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
-    info!("Error code: {error_code}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Error code: {error_code}");
+    });
 
     loop {
         x86_64::instructions::hlt();
@@ -313,20 +375,30 @@ extern "x86-interrupt" fn security_exception_handler(
     interrupt_stack_frame: InterruptStackFrame,
     error_code: u64,
 ) {
-    warn!("Security exception");
+    use_kernel_page_table(|| {
+        warn!("Security exception");
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
-    info!("Error code: {error_code}");
+        info!("Stack frame: {interrupt_stack_frame:?}");
+        info!("Error code: {error_code}");
+    });
 
     loop {
         x86_64::instructions::hlt();
     }
 }
 
-extern "x86-interrupt" fn unknown_interrupt_handler(interrupt_stack_frame: InterruptStackFrame) {
-    info!("Unknown interrupt");
+extern "x86-interrupt" fn syscall_handler(_interrupt_stack_frame: InterruptStackFrame) {
+    use_kernel_page_table(|| {
+        info!("Syscall!");
+    });
+}
 
-    info!("Stack frame: {interrupt_stack_frame:?}");
+extern "x86-interrupt" fn unknown_interrupt_handler(interrupt_stack_frame: InterruptStackFrame) {
+    use_kernel_page_table(|| {
+        info!("Unknown interrupt");
+
+        info!("Stack frame: {interrupt_stack_frame:?}");
+    });
 
     loop {
         x86_64::instructions::hlt();

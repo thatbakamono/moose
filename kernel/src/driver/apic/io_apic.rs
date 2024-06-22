@@ -21,10 +21,13 @@ impl IoApic {
         let register_data_ptr = (madt_io_apic.io_apic_address + 0x10) as *mut u32;
 
         unsafe {
-            if let Err(e) = memory_manager().write().map_identity(
-                &Page::new(VirtualAddress::new(madt_io_apic.io_apic_address as u64)),
-                PageFlags::WRITABLE | PageFlags::WRITE_THROUGH,
-            ) {
+            if let Err(e) = memory_manager()
+                .write()
+                .map_identity_for_current_address_space(
+                    &Page::new(VirtualAddress::new(madt_io_apic.io_apic_address as u64)),
+                    PageFlags::WRITABLE | PageFlags::WRITE_THROUGH,
+                )
+            {
                 match e {
                     MemoryError::AlreadyMapped => {}
                     invalid => panic!("{}", invalid),
