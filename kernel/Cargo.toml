@@ -19,6 +19,8 @@ libm = "0.2.8"
 aml = "0.16.4"
 bitfield-struct = "0.6.1"
 bytemuck = "1.16.0"
+goblin = { version = "0.8.2", default-features = false, features = ["alloc", "elf32", "elf64", "endian_fd"] }
+sandbox = { version = "0.1.0", path = "../sandbox" }
 
 [profile.dev]
 opt-level = 1

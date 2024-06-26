@@ -1,4 +1,5 @@
 use alloc::{boxed::Box, vec::Vec};
+use core::{arch::asm, ffi::CStr};
 use log::{error, info, warn};
 use x86_64::{
     registers::control::Cr2,
@@ -633,9 +634,79 @@ extern "x86-interrupt" fn security_exception_handler(
 }
 
 extern "x86-interrupt" fn syscall_handler(_interrupt_stack_frame: InterruptStackFrame) {
-    use_kernel_page_table(|| {
-        info!("Syscall!");
-    });
+    unsafe {
+        asm!(
+            "
+            push r9
+            push r8
+            push r10
+            push rdx
+            push rsi
+            push rdi
+            push rax
+        "
+        );
+    }
+
+    let mut rax: u64;
+    let mut rdi: u64;
+    let mut rsi: u64;
+    let mut rdx: u64;
+    let mut r10: u64;
+    let mut r8: u64;
+    let mut r9: u64;
+
+    unsafe {
+        asm!(
+            "
+                pop {rax}
+                pop {rdi}
+                pop {rsi}
+                pop {rdx}
+                pop {r10}
+                pop {r8}
+                pop {r9}
+            ", 
+            rax = out(reg) rax,
+            rdi = out(reg) rdi,
+            rsi = out(reg) rsi,
+            rdx = out(reg) rdx,
+            r10 = out(reg) r10,
+            r8 = out(reg) r8,
+            r9 = out(reg) r9,
+        );
+    }
+
+    let id = rax;
+
+    match id {
+        1 => {
+            let descriptor = rdi;
+            let buffer = rsi as *const u8;
+            let count = rdx;
+
+            let mut buffer_copied = [0u8; 512];
+
+            assert!(count < 512);
+
+            for i in 0..count as usize {
+                buffer_copied[i] = unsafe { *buffer.add(i) };
+            }
+
+            buffer_copied[count as usize] = 0;
+
+            use_kernel_page_table(|| {
+                info!("sys_write ({descriptor}, {buffer:p}, {count})");
+                info!(
+                    "{}",
+                    CStr::from_bytes_until_nul(&buffer_copied[..])
+                        .unwrap()
+                        .to_string_lossy()
+                );
+            });
+        }
+        _ => unimplemented!(),
+    }
 }
 
 extern "x86-interrupt" fn unknown_interrupt_handler(interrupt_stack_frame: InterruptStackFrame) {
