@@ -140,26 +140,6 @@ flags:
 ;   data
     .reserved equ 1 << 5
 
-struc TSSEntry
-    .reserved1 resd 1
-    .rsp0 resq 1
-    .rsp1 resq 1
-    .rsp2 resq 1
-    .reserved2 resd 1
-    .reserved3 resd 1
-    .ist1 resq 1
-    .ist2 resq 1
-    .ist3 resq 1
-    .ist4 resq 1
-    .ist5 resq 1
-    .ist6 resq 1
-    .ist7 resq 1
-    .reserved4 resd 1
-    .reserved5 resd 1
-    .reserved6 resw 1
-    .iopb resw 1
-endstruc
-
 gdtr:
     dw gdt.end + 1  ; size
     dq gdt          ; offset
