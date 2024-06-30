@@ -25,6 +25,7 @@ use crate::memory::initialize_memory_manager;
 use crate::terminal::Terminal;
 use alloc::sync::Arc;
 use core::arch::asm;
+use driver::net::nic::rtl8139::Rtl8139;
 use limine::paging::Mode;
 use limine::request::{
     FramebufferRequest, HhdmRequest, MemoryMapRequest, PagingModeRequest, RsdpRequest,
@@ -144,12 +145,20 @@ unsafe extern "C" fn _start() -> ! {
         irq_allocator: Arc::new(Mutex::new(irq_allocator)),
     }));
 
-    let _pci_devices = Pci::build_device_tree();
+    let pci_devices = Pci::build_device_tree();
 
     let bsp_lapic = LocalApic::initialize_for_current_processor(Arc::clone(&kernel));
     let pcb = cpu::ProcessorControlBlock::get_pcb_for_current_processor();
 
     _ = (*pcb).local_apic.set(bsp_lapic);
+
+    pci_devices
+        .into_iter()
+        .filter(|dev| dev.device_id == 0x8139)
+        .for_each(|dev| {
+            let mut rtl8139 = Rtl8139::new(Arc::new(Mutex::new(dev)), Arc::clone(&kernel));
+            rtl8139.initialize();
+        });
 
     kernel
         .read()

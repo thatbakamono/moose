@@ -16,7 +16,7 @@ impl IrqAllocator {
 
         self.buckets[irq_level as usize] += 1;
 
-        ((irq_level as u8) << 5) | free_irq
+        ((irq_level as u8) << 4) | free_irq
     }
 }
 
@@ -27,5 +27,6 @@ pub enum IrqLevel {
     InterProcessorInterrupt = 14,
     Clock = 13,
     // 12-1 are free, probably for device drivers use
+    NetworkInterfaceCard = 7,
     Passive = 0,
 }
