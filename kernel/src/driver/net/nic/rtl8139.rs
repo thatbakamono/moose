@@ -30,6 +30,7 @@ const INTERRUPT_STATUS_REGISTER: u16 = 0x3E;
 const RECEIVE_CONFIGURATION_REGISTER: u16 = 0x44;
 const CONFIG_1_REGISTER: u16 = 0x52;
 const RX_BUFFER_SIZE: usize = (1 << 13) + 1500 + 4 + 4;
+const RX_RING_BUFFER_SIZE: usize = 8192;
 
 #[repr(C, align(4096))]
 struct RxBuffer([u8; RX_BUFFER_SIZE]);
@@ -92,7 +93,11 @@ impl Rtl8139 {
     }
 
     pub fn initialize(&mut self) {
-        assert_eq!(CpuId::new().get_hypervisor_info().unwrap().identify(), Hypervisor::QEMU, "RTL8139 interrupts are only supported on QEMU currently, due to very unpleasant way of handling interrupts without MSI/MSI-X on PCI devices.");
+        assert_eq!(
+            CpuId::new().get_hypervisor_info().unwrap().identify(),
+            Hypervisor::QEMU,
+            "RTL8139 interrupts are only supported on QEMU currently, due to very unpleasant way of handling interrupts without MSI/MSI-X on PCI devices."
+        );
 
         without_interrupts(|| {
             let rtl8139 = self.inner.lock();
@@ -193,7 +198,7 @@ impl Rtl8139 {
             );
 
             // Finally, enable receiver and transmitter
-            //                                                RE      |  TE
+            //                                        RE      |  TE
             outb(rtl8139.io_base + COMMAND_REGISTER, (1 << 3) | (1 << 2));
         });
     }
@@ -281,7 +286,7 @@ impl Rtl8139Inner {
         // 4 is the data status and data length
         // 1518 is maximum Ethernet frame length
         // 4 is CRC32 checksum appended at the end of the data
-        let mut buffer = [0u8; 4 + 1518 + 4 + 1];
+        let mut buffer = [0u8; 4 + 1518 + 4];
 
         for i in 0..length {
             unsafe {
@@ -294,8 +299,8 @@ impl Rtl8139Inner {
         self.current_rx_offset = (self.current_rx_offset + length as usize + 4 + 3) & !3;
 
         // It's ring buffer, so if we overflow, just go back to the start.
-        if self.current_rx_offset > 8192 {
-            self.current_rx_offset -= 8192;
+        if self.current_rx_offset > RX_RING_BUFFER_SIZE {
+            self.current_rx_offset -= RX_RING_BUFFER_SIZE;
         }
 
         // Notify network card about new RX buffer reading offset
