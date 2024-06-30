@@ -16,7 +16,17 @@ if ($logs) {
     [void]$command.Append('-d int -D ./log.txt ')
 }
 
-[void]$command.Append('-no-reboot -cpu qemu64,apic,fsgsbase -smp 4 -m 256M -drive file=moose.img,format=raw,if=ide -drive file=fat.img,format=raw -serial stdio ')
+[void]$command.Append('-no-reboot ')
+[void]$command.Append('-cpu qemu64,apic,fsgsbase ')
+[void]$command.Append('-smp 4 ')
+[void]$command.Append('-m 256M ')
+
+[void]$command.Append('-netdev tap,id=n1,ifname=tap ')
+[void]$command.Append('-device rtl8139,netdev=n1 ')
+
+[void]$command.Append('-drive file=moose.img,format=raw,if=ide ')
+[void]$command.Append('-drive file=fat.img,format=raw ')
+[void]$command.Append('-serial stdio ')
 
 if ($release) {
     ./package.ps1 -r
