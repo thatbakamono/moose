@@ -1,4 +1,4 @@
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 use log::{error, info, warn};
 use x86_64::{
     registers::control::Cr2,
@@ -7,8 +7,8 @@ use x86_64::{
 
 pub static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 
-static mut REGISTERED_INTERRUPT_HANDLERS: [Vec<fn(&InterruptStackFrame)>; 224] = {
-    const DEFAULT: Vec<fn(&InterruptStackFrame)> = Vec::new();
+static mut REGISTERED_INTERRUPT_HANDLERS: [Vec<Box<dyn Fn(&InterruptStackFrame)>>; 224] = {
+    const DEFAULT: Vec<Box<dyn Fn(&InterruptStackFrame)>> = Vec::new();
 
     [DEFAULT; 224]
 };
@@ -285,7 +285,7 @@ pub fn init_idt() {
     }
 }
 
-pub fn register_interrupt_handler(n: u8, handler: fn(&InterruptStackFrame)) {
+pub fn register_interrupt_handler(n: u8, handler: Box<dyn Fn(&InterruptStackFrame)>) {
     unsafe {
         REGISTERED_INTERRUPT_HANDLERS[n as usize - 32].push(handler);
     }
