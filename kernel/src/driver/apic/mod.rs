@@ -1,10 +1,11 @@
 mod io_apic;
 mod local_apic;
 
+use alloc::boxed::Box;
 pub use io_apic::*;
 pub use local_apic::*;
 
-use crate::arch::x86::idt::IDT;
+use crate::arch::x86::idt::register_interrupt_handler;
 use crate::driver::acpi::{Acpi, MadtEntryInner};
 use crate::driver::pit::PIT;
 use crate::kernel::Kernel;
@@ -35,7 +36,7 @@ impl Apic {
             "CPU does not support APIC"
         );
 
-        unsafe { IDT[timer_irq].set_handler_fn(timer_interrupt_handler) };
+        register_interrupt_handler(timer_irq, Box::new(|isf| timer_interrupt_handler(isf)));
 
         let io_apics = acpi
             .madt

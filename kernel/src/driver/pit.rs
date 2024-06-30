@@ -1,6 +1,7 @@
-use crate::arch;
 use crate::arch::x86::asm::outb;
+use crate::arch::x86::idt::register_interrupt_handler;
 use crate::driver::pic::{PIC, PIC_1_OFFSET};
+use alloc::boxed::Box;
 use core::arch::asm;
 use spin::RwLock;
 use x86_64::instructions::interrupts::without_interrupts;
@@ -66,9 +67,7 @@ impl ProgrammableIntervalTimer {
         outb(CHANNEL0_DATA_PORT, (divisor >> 8) as u8);
 
         // Set timer interrupt handler
-        unsafe {
-            arch::x86::idt::IDT[PIT_TIMER].set_handler_fn(pit_interrupt_handler);
-        }
+        register_interrupt_handler(PIT_TIMER, Box::new(|isf| pit_interrupt_handler(isf)));
 
         x86_64::instructions::interrupts::enable();
 
@@ -123,7 +122,7 @@ impl ProgrammableIntervalTimer {
     }
 }
 
-extern "x86-interrupt" fn pit_interrupt_handler(_interrupt_stack_frame: InterruptStackFrame) {
+fn pit_interrupt_handler(_interrupt_stack_frame: &InterruptStackFrame) {
     unsafe { PIT.interrupt_handler() }
     outb(0x20, 0x20);
 }

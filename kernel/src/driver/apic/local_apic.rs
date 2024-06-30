@@ -196,7 +196,7 @@ impl LocalApic {
     }
 }
 
-pub extern "x86-interrupt" fn timer_interrupt_handler(_interrupt_stack_frame: InterruptStackFrame) {
+pub(crate) fn timer_interrupt_handler(_interrupt_stack_frame: &InterruptStackFrame) {
     unsafe {
         _ = &(*ProcessorControlBlock::get_pcb_for_current_processor())
             .local_apic
