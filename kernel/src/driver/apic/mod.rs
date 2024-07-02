@@ -3,6 +3,7 @@ mod local_apic;
 
 pub use io_apic::*;
 pub use local_apic::*;
+use x86_64::VirtAddr;
 
 use crate::arch::x86::idt::IDT;
 use crate::driver::acpi::{Acpi, MadtEntryInner};
@@ -35,7 +36,10 @@ impl Apic {
             "CPU does not support APIC"
         );
 
-        unsafe { IDT[timer_irq].set_handler_fn(timer_interrupt_handler) };
+        unsafe {
+            IDT[timer_irq]
+                .set_handler_addr(VirtAddr::new(raw_timer_interrupt_handler as usize as u64))
+        };
 
         let io_apics = acpi
             .madt

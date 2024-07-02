@@ -4,13 +4,17 @@ use crate::cpu::ProcessorControlBlock;
 use crate::driver::pit::PIT;
 use crate::kernel::Kernel;
 use crate::memory::{memory_manager, MemoryError, Page, PageFlags, VirtualAddress};
+use crate::process::Registers;
+use crate::scheduler::Scheduler;
 use alloc::sync::Arc;
 use core::arch::asm;
+use core::mem::{self, offset_of};
 use core::ptr;
 use log::info;
 use spin::RwLock;
-use x86_64::registers::control::{Cr4, Cr4Flags};
-use x86_64::structures::idt::InterruptStackFrame;
+use x86_64::registers::control::{Cr3, Cr3Flags, Cr4, Cr4Flags};
+use x86_64::structures::paging::{PhysFrame, Size4KiB};
+use x86_64::PhysAddr;
 
 pub const LOCAL_APIC_LAPIC_ID_REGISTER: u32 = 0x20;
 pub const LOCAL_APIC_LAPIC_VERSION_REGISTER: u32 = 0x23;
@@ -197,12 +201,145 @@ impl LocalApic {
     }
 }
 
-pub extern "x86-interrupt" fn timer_interrupt_handler(_interrupt_stack_frame: InterruptStackFrame) {
+#[naked]
+pub(crate) extern "C" fn raw_timer_interrupt_handler() -> ! {
+    unsafe {
+        asm!(
+            "
+                sub rsp, {size}
+                
+                mov [rsp + {rax_offset}], rax
+                mov [rsp + {rbx_offset}], rbx
+                mov [rsp + {rcx_offset}], rcx
+                mov [rsp + {rdx_offset}], rdx
+                mov [rsp + {rsi_offset}], rsi
+                mov [rsp + {rdi_offset}], rdi
+                mov [rsp + {rbp_offset}], rbp
+                
+                mov rax, [rsp + {interrupt_stack_frame_rsp_offset}]
+                mov [rsp + {rsp_offset}], rax
+                
+                mov [rsp + {r8_offset}], r8
+                mov [rsp + {r9_offset}], r9
+                mov [rsp + {r10_offset}], r10
+                mov [rsp + {r11_offset}], r11
+                mov [rsp + {r12_offset}], r12
+                mov [rsp + {r13_offset}], r13
+                mov [rsp + {r14_offset}], r14
+                mov [rsp + {r15_offset}], r15
+                
+                mov rax, [rsp + {interrupt_stack_frame_rip_offset}]
+                mov [rsp + {rip_offset}], rax
+                
+                mov rax, [rsp + {interrupt_stack_frame_rflags_offset}]
+                mov [rsp + {rflags_offset}], rax
+
+                mov rax, [rsp + {interrupt_stack_frame_cs_offset}]
+                mov [rsp + {cs_offset}], rax
+                mov rax, [rsp + {interrupt_stack_frame_ss_offset}]
+                mov [rsp + {ss_offset}], rax
+                rdfsbase rax
+                mov [rsp + {fs_offset}], rax
+                rdgsbase rax
+                mov [rsp + {gs_offset}], rax
+
+                mov rdi, rsp
+                call timer_interrupt_handler
+
+                mov rax, [rsp + {fs_offset}]
+                wrfsbase rax
+
+                mov rax, [rsp + {gs_offset}]
+                wrgsbase rax
+
+                mov rax, [rsp + {rax_offset}]
+                mov rbx, [rsp + {rbx_offset}]
+                mov rcx, [rsp + {rcx_offset}]
+                mov rdx, [rsp + {rdx_offset}]
+                mov rsi, [rsp + {rsi_offset}]
+                mov rdi, [rsp + {rdi_offset}]
+                mov rbp, [rsp + {rbp_offset}]
+
+                mov r8, [rsp + {r8_offset}]
+                mov r9, [rsp + {r9_offset}]
+                mov r10, [rsp + {r10_offset}]
+                mov r11, [rsp + {r11_offset}]
+                mov r12, [rsp + {r12_offset}]
+                mov r13, [rsp + {r13_offset}]
+                mov r14, [rsp + {r14_offset}]
+                mov r15, [rsp + {r15_offset}]
+
+                push [rsp + ({ss_offset} + 0)]
+                push [rsp + ({rsp_offset} + 8)]
+                push [rsp + ({rflags_offset} + 16)]
+                push [rsp + ({cs_offset} + 24)]
+                push [rsp + ({rip_offset} + 32)]
+
+                iretq
+            ",
+            options(noreturn),
+            size = const(mem::size_of::<Registers>()),
+            rax_offset = const(offset_of!(Registers, rax)),
+            rbx_offset = const(offset_of!(Registers, rbx)),
+            rcx_offset = const(offset_of!(Registers, rcx)),
+            rdx_offset = const(offset_of!(Registers, rdx)),
+            rsi_offset = const(offset_of!(Registers, rsi)),
+            rdi_offset = const(offset_of!(Registers, rdi)),
+            rbp_offset = const(offset_of!(Registers, rbp)),
+            rsp_offset = const(offset_of!(Registers, rsp)),
+            r8_offset = const(offset_of!(Registers, r8)),
+            r9_offset = const(offset_of!(Registers, r9)),
+            r10_offset = const(offset_of!(Registers, r10)),
+            r11_offset = const(offset_of!(Registers, r11)),
+            r12_offset = const(offset_of!(Registers, r12)),
+            r13_offset = const(offset_of!(Registers, r13)),
+            r14_offset = const(offset_of!(Registers, r14)),
+            r15_offset = const(offset_of!(Registers, r15)),
+            rip_offset = const(offset_of!(Registers, rip)),
+            rflags_offset = const(offset_of!(Registers, rflags)),
+            cs_offset = const(offset_of!(Registers, cs)),
+            ss_offset = const(offset_of!(Registers, ss)),
+            fs_offset = const(offset_of!(Registers, fs)),
+            gs_offset = const(offset_of!(Registers, gs)),
+            interrupt_stack_frame_rsp_offset = const(mem::size_of::<Registers>() + 24),
+            interrupt_stack_frame_rip_offset = const(mem::size_of::<Registers>()),
+            interrupt_stack_frame_rflags_offset = const(mem::size_of::<Registers>() + 16),
+            interrupt_stack_frame_cs_offset = const(mem::size_of::<Registers>() + 8),
+            interrupt_stack_frame_ss_offset = const(mem::size_of::<Registers>() + 32),
+        )
+    }
+}
+
+#[no_mangle]
+extern "C" fn timer_interrupt_handler(registers: *mut Registers) {
+    {
+        let current_thread = Scheduler::current_thread_mut();
+
+        current_thread.registers = unsafe { (*registers).clone() };
+    }
+
+    Scheduler::finish_execution();
+
+    let current_thread = Scheduler::current_thread();
+
+    unsafe { *registers = current_thread.registers.clone() };
+
+    let current_process = current_thread.process();
+
     use_kernel_page_table(|| unsafe {
-        _ = &(*ProcessorControlBlock::get_pcb_for_current_processor())
+        (*ProcessorControlBlock::get_pcb_for_current_processor())
             .local_apic
             .get()
             .unwrap()
             .signal_end_of_interrupt();
     });
+
+    {
+        let program_page_table_frame = PhysFrame::<Size4KiB>::from_start_address(PhysAddr::new(
+            current_process.page_table_physical_address,
+        ))
+        .unwrap();
+
+        unsafe { Cr3::write(program_page_table_frame, Cr3Flags::empty()) };
+    }
 }

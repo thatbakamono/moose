@@ -4,6 +4,7 @@
 #![feature(strict_provenance)]
 #![feature(const_size_of_val)]
 #![feature(naked_functions)]
+#![feature(asm_const)]
 #![no_std]
 #![no_main]
 
@@ -15,20 +16,19 @@ mod cpu;
 mod driver;
 mod font;
 mod kernel;
+mod linker;
 mod logger;
 mod memory;
+mod process;
+mod scheduler;
 mod serial;
 mod terminal;
 mod vga;
 
 use crate::allocator::initialize_heap;
 use crate::driver::{pic::PIC, pit::PIT};
-use crate::memory::{
-    current_page_table, initialize_memory_manager, memory_manager, Page, PageFlags, PageTable,
-    VirtualAddress,
-};
+use crate::memory::initialize_memory_manager;
 use crate::terminal::Terminal;
-use alloc::boxed::Box;
 use alloc::sync::Arc;
 use bitfield_struct::bitfield;
 use bitflags::bitflags;
@@ -37,8 +37,6 @@ use core::arch::asm;
 use core::cmp::min;
 use core::ptr::addr_of;
 use core::{mem, ptr};
-use goblin::elf::program_header::{PF_R, PF_W, PF_X};
-use goblin::elf::{program_header, Elf};
 use limine::paging::Mode;
 use limine::request::{
     FramebufferRequest, HhdmRequest, KernelAddressRequest, MemoryMapRequest, PagingModeRequest,
@@ -46,13 +44,11 @@ use limine::request::{
 };
 use limine::BaseRevision;
 use log::{error, info};
-use memory::{Frame, MemoryManager, PAGE_SIZE};
+use process::Process;
 use raw_cpuid::CpuId;
+use scheduler::Scheduler;
 use spin::{Mutex, RwLock};
-use x86_64::instructions::tlb;
-use x86_64::registers::control::{Cr3, Cr3Flags, Cr4, Cr4Flags, Efer, EferFlags};
-use x86_64::structures::paging::{PhysFrame, Size4KiB};
-use x86_64::PhysAddr;
+use x86_64::registers::control::{Cr3, Cr4, Cr4Flags, Efer, EferFlags};
 
 use crate::arch::irq::{IrqAllocator, IrqLevel};
 use crate::driver::acpi::{Acpi, Rsdp};
@@ -101,7 +97,7 @@ unsafe extern "C" fn _start() -> ! {
     assert!(STACK_SIZE_REQUEST.get_response().is_some());
 
     Efer::write(Efer::read() | EferFlags::NO_EXECUTE_ENABLE);
-    Cr4::write(Cr4::read() | Cr4Flags::PAGE_GLOBAL | Cr4Flags::FSGSBASE);
+    Cr4::write(Cr4::read() | Cr4Flags::PAGE_GLOBAL | Cr4Flags::PCID | Cr4Flags::FSGSBASE);
 
     KERNEL_PAGE_TABLE = Cr3::read().0.start_address().as_u64() as *const ();
 
@@ -178,7 +174,7 @@ unsafe extern "C" fn _start() -> ! {
             "
         );
 
-        asm!("sti", options(nostack, nomem));
+        asm!("sti", options(nomem));
     }
 
     PIC.initialize();
@@ -226,140 +222,17 @@ unsafe extern "C" fn _start() -> ! {
 
     switch_to_post_boot_logger(serial, terminal);
 
-    (*pcb).local_apic.get().unwrap().enable_timer();
-
     info!("Entering user mode!");
 
-    {
-        static PROGRAM: &[u8] = include_bytes!("../../sandbox/target/x86_64-moose/release/sandbox");
+    static PROGRAM_1: &[u8] = include_bytes!("../../program1/target/x86_64-moose/release/program1");
+    static PROGRAM_2: &[u8] = include_bytes!("../../program2/target/x86_64-moose/release/program2");
 
-        let mut memory_manager = memory_manager().write();
+    Process::new(PROGRAM_1, physical_memory_offset, interrupt_stack).start();
+    Process::new(PROGRAM_2, physical_memory_offset, interrupt_stack).start();
 
-        let stack = alloc::alloc::alloc_zeroed(Layout::new::<Stack>());
+    (*pcb).local_apic.get().unwrap().enable_timer();
 
-        let program_page_table = Box::leak(Box::new(PageTable::new()));
-
-        // map kernel in program's address space
-        {
-            let kernel_virtual_base_address = KERNEL_ADDRESS_REQUEST
-                .get_response()
-                .unwrap()
-                .virtual_base();
-
-            let kernel_level_4_page_table_entry_index =
-                ((kernel_virtual_base_address >> 39) & 0b1_1111_1111) as usize;
-
-            let kernel_page_table = current_page_table(physical_memory_offset);
-
-            let level_4_page_table_entry =
-                &unsafe { &*kernel_page_table }[kernel_level_4_page_table_entry_index];
-
-            program_page_table[kernel_level_4_page_table_entry_index]
-                .set_address(level_4_page_table_entry.address());
-            program_page_table[kernel_level_4_page_table_entry_index]
-                .set_flags(level_4_page_table_entry.flags());
-        }
-
-        // map kernel's stack in program's address space | FIXME (XD!)
-        {
-            let kernel_page_table = current_page_table(physical_memory_offset);
-
-            let level_4_page_table_entry = &unsafe { &*kernel_page_table }[256];
-
-            program_page_table[256].set_address(level_4_page_table_entry.address());
-            program_page_table[256].set_flags(level_4_page_table_entry.flags());
-        }
-
-        // map kernel's heap in program's address space | FIXME (XD!)
-        {
-            let kernel_page_table = current_page_table(physical_memory_offset);
-
-            let level_4_page_table_entry = &unsafe { &*kernel_page_table }[136];
-
-            program_page_table[136].set_address(level_4_page_table_entry.address());
-            program_page_table[136].set_flags(level_4_page_table_entry.flags());
-        }
-
-        // remap interrupt's stack in program's address space
-        {
-            for page_index in 0..4 {
-                let interrupt_stack_virtual_address =
-                    VirtualAddress::new(interrupt_stack as u64 + (page_index * 4096));
-                let interrupt_stack_physical_address = memory_manager
-                    .translate_virtual_address_to_physical_for_current_address_space(
-                        interrupt_stack_virtual_address,
-                    )
-                    .unwrap();
-
-                memory_manager
-                    .unmap(
-                        program_page_table,
-                        &Page::new(interrupt_stack_virtual_address),
-                    )
-                    .unwrap();
-
-                memory_manager
-                    .map(
-                        program_page_table,
-                        &Page::new(interrupt_stack_virtual_address),
-                        &Frame::new(interrupt_stack_physical_address),
-                        PageFlags::WRITABLE,
-                    )
-                    .unwrap();
-            }
-        }
-
-        let entry_point = Linker::link(PROGRAM, &mut memory_manager, program_page_table);
-
-        // remap program's stack in program's address space
-        {
-            for page_index in 0..4 {
-                let stack_virtual_address = VirtualAddress::new(stack as u64 + (page_index * 4096));
-                let stack_physical_address = memory_manager
-                    .translate_virtual_address_to_physical_for_current_address_space(
-                        stack_virtual_address,
-                    )
-                    .unwrap();
-
-                memory_manager
-                    .unmap(program_page_table, &Page::new(stack_virtual_address))
-                    .unwrap();
-
-                memory_manager
-                    .map(
-                        program_page_table,
-                        &Page::new(stack_virtual_address),
-                        &Frame::new(stack_physical_address),
-                        PageFlags::USER_MODE_ACCESSIBLE | PageFlags::WRITABLE,
-                    )
-                    .unwrap();
-            }
-        }
-
-        // switch page table
-        {
-            let program_page_table_physical_address = memory_manager
-                .translate_virtual_address_to_physical_for_current_address_space(
-                    VirtualAddress::new(program_page_table as *const _ as u64),
-                )
-                .unwrap()
-                .as_u64();
-
-            let program_page_table_frame = PhysFrame::<Size4KiB>::from_start_address(
-                PhysAddr::new(program_page_table_physical_address),
-            )
-            .unwrap();
-
-            Cr3::write(program_page_table_frame, Cr3Flags::empty());
-
-            tlb::flush_all();
-        }
-
-        enter_user_mode(
-            entry_point as *const _,
-            stack.add(mem::size_of::<Stack>()).offset(-16),
-        );
-    }
+    Scheduler::run();
 }
 
 pub trait Read {
@@ -408,112 +281,6 @@ impl Read for Cursor<&[u8]> {
     }
 }
 
-pub struct Linker;
-
-impl Linker {
-    fn link(binary: &[u8], memory_manager: &mut MemoryManager, page_table: &mut PageTable) -> u64 {
-        let elf = Elf::parse(binary).unwrap();
-
-        if !elf.is_64 {
-            panic!("Unsupported architecture");
-        }
-
-        if elf.is_lib {
-            panic!();
-        }
-
-        if !elf.little_endian {
-            panic!("Unsupported endianness");
-        }
-
-        if !elf.libraries.is_empty() {
-            unimplemented!();
-        }
-
-        if !elf.shdr_relocs.is_empty() {
-            unimplemented!();
-        }
-
-        if !elf.pltrelocs.is_empty() {
-            unimplemented!();
-        }
-
-        if !elf.dynrels.is_empty() {
-            unimplemented!();
-        }
-
-        if !elf.dynrelas.is_empty() {
-            unimplemented!();
-        }
-
-        if !elf.dynsyms.is_empty() {
-            unimplemented!();
-        }
-
-        let mut reader = Cursor::new(binary);
-        let mut buffer = [0u8; PAGE_SIZE];
-
-        for header in elf.program_headers {
-            if header.p_type == program_header::PT_LOAD {
-                if header.p_flags & PF_R == 0 {
-                    unimplemented!();
-                }
-
-                if header.p_align != PAGE_SIZE as u64 {
-                    unimplemented!();
-                }
-
-                let required_frames =
-                    (header.p_filesz + (PAGE_SIZE as u64 - 1)) as usize / PAGE_SIZE;
-
-                for _ in 0..required_frames {
-                    reader.seek(header.p_offset);
-
-                    let read = reader.read(&mut buffer).unwrap();
-
-                    let page =
-                        Page::new(VirtualAddress::new(header.p_vaddr & 0xfff_ffff_ffff_f000));
-                    let frame = memory_manager.allocate_frame().unwrap();
-
-                    let offset = header.p_vaddr - (header.p_vaddr & 0xfff_ffff_ffff_f000);
-
-                    unsafe {
-                        memory_manager
-                            .map_any_temporary_for_current_address_space(
-                                &frame,
-                                PageFlags::WRITABLE,
-                                |page| {
-                                    let destination = page.address().as_mut_ptr::<u8>();
-
-                                    for i in 0..read {
-                                        *destination.add(offset as usize + i) = buffer[i];
-                                    }
-                                },
-                            )
-                            .unwrap();
-
-                        let mut flags = PageFlags::USER_MODE_ACCESSIBLE;
-
-                        if header.p_flags & PF_W != 0 {
-                            flags |= PageFlags::WRITABLE;
-                        }
-
-                        if header.p_flags & PF_X != 0 {
-                            flags |= PageFlags::EXECUTABLE;
-                        }
-
-                        memory_manager
-                            .map(page_table, &page, &frame, flags)
-                            .unwrap();
-                    }
-                }
-            }
-        }
-
-        elf.entry
-    }
-}
-
 #[repr(C)]
 #[repr(align(4096))]
 struct Stack([u8; 16 * 1024]);
@@ -522,29 +289,6 @@ impl Stack {
     fn new() -> Self {
         Self([0; 16 * 1024])
     }
-}
-
-extern "C" fn enter_user_mode(program: *const u8, stack: *const u8) -> ! {
-    unsafe {
-        asm!(
-            "
-                mov dx, (8 << 3) | 3
-                mov ds, dx
-                mov es, dx
-
-                push (8 << 3) | 3
-                push {stack}
-                pushf
-                push (7 << 3) | 3
-                push {program}
-
-                iretq
-            ",
-            program = in(reg) program,
-            stack = in(reg) stack,
-            options(noreturn)
-        );
-    };
 }
 
 static mut GDT_DESCRIPTOR: GlobalDescriptorTableDescriptor =
