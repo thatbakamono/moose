@@ -311,6 +311,8 @@ impl Rtl8139Inner {
     }
 }
 
+unsafe impl Send for Rtl8139Inner {}
+
 fn handle_rtl8139_interrupt(nic: &mut Rtl8139Inner) {
     let status = inw(nic.io_base + INTERRUPT_STATUS_REGISTER);
 
