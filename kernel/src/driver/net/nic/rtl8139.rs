@@ -274,7 +274,7 @@ impl Rtl8139Inner {
         //   - data status
         //   - data length
 
-        let data_start = unsafe { self.rx_buffer.offset(self.current_rx_offset as isize) };
+        let data_start = unsafe { self.rx_buffer.add(self.current_rx_offset) };
         let status = unsafe { (data_start.add(0) as *const u16).read_volatile() };
         let length = unsafe { (data_start.add(2) as *const u16).read_volatile() };
 
