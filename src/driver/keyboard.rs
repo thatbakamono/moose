@@ -59,6 +59,8 @@ extern "x86-interrupt" fn ps2_keyboard_interrupt_handler(
     static mut IS_EXTENDED: bool = false;
     static mut IS_PRINT_SCREEN_PRESSED_SEQUENCE: bool = false;
     static mut IS_PRINT_SCREEN_RELEASED_SEQUENCE: bool = false;
+    static mut IS_PAUSE_BREAK_SEQUENCE: bool = false;
+    static mut PAUSE_BREAK_SEQUENCE_STEP: u8 = 0;
 
     let status = inb(0x64);
 
@@ -97,10 +99,161 @@ extern "x86-interrupt" fn ps2_keyboard_interrupt_handler(
     if can_read {
         let code = inb(0x60);
 
-        if code == 0xE0 {
+        if code == 0xE0 && unsafe { !IS_EXTENDED } {
             unsafe {
                 IS_EXTENDED = true;
 
+                _ = &(*ProcessorControlBlock::get_pcb_for_current_processor())
+                    .local_apic
+                    .get()
+                    .unwrap()
+                    .signal_end_of_interrupt();
+            }
+
+            return;
+        }
+
+        if code == 0xE1 && unsafe { !IS_PAUSE_BREAK_SEQUENCE } {
+            unsafe {
+                IS_PAUSE_BREAK_SEQUENCE = true;
+
+                _ = &(*ProcessorControlBlock::get_pcb_for_current_processor())
+                    .local_apic
+                    .get()
+                    .unwrap()
+                    .signal_end_of_interrupt();
+            }
+
+            return;
+        }
+
+        if unsafe { IS_PAUSE_BREAK_SEQUENCE } {
+            match unsafe { PAUSE_BREAK_SEQUENCE_STEP } {
+                0 => {
+                    if code == 0x1D {
+                        unsafe {
+                            PAUSE_BREAK_SEQUENCE_STEP += 1;
+                        }
+                    } else {
+                        error!(
+                            "[Keyboard] Invalid pause break sequence, expected 0x1D, got 0x{code:X}"
+                        );
+
+                        unsafe {
+                            IS_PAUSE_BREAK_SEQUENCE = false;
+
+                            _ = &(*ProcessorControlBlock::get_pcb_for_current_processor())
+                                .local_apic
+                                .get()
+                                .unwrap()
+                                .signal_end_of_interrupt();
+                        }
+
+                        return;
+                    }
+                }
+                1 => {
+                    if code == 0x45 {
+                        unsafe {
+                            PAUSE_BREAK_SEQUENCE_STEP += 1;
+                        }
+                    } else {
+                        error!(
+                            "[Keyboard] Invalid pause break sequence, expected 0x45, got 0x{code:X}"
+                        );
+
+                        unsafe {
+                            IS_PAUSE_BREAK_SEQUENCE = false;
+                            PAUSE_BREAK_SEQUENCE_STEP = 0;
+
+                            _ = &(*ProcessorControlBlock::get_pcb_for_current_processor())
+                                .local_apic
+                                .get()
+                                .unwrap()
+                                .signal_end_of_interrupt();
+                        }
+
+                        return;
+                    }
+                }
+                2 => {
+                    if code == 0xE1 {
+                        unsafe {
+                            PAUSE_BREAK_SEQUENCE_STEP += 1;
+                        }
+                    } else {
+                        error!(
+                            "[Keyboard] Invalid pause break sequence, expected 0xE1, got 0x{code:X}"
+                        );
+
+                        unsafe {
+                            IS_PAUSE_BREAK_SEQUENCE = false;
+                            PAUSE_BREAK_SEQUENCE_STEP = 0;
+
+                            _ = &(*ProcessorControlBlock::get_pcb_for_current_processor())
+                                .local_apic
+                                .get()
+                                .unwrap()
+                                .signal_end_of_interrupt();
+                        }
+
+                        return;
+                    }
+                }
+                3 => {
+                    if code == 0x9D {
+                        unsafe {
+                            PAUSE_BREAK_SEQUENCE_STEP += 1;
+                        }
+                    } else {
+                        error!(
+                            "[Keyboard] Invalid pause break sequence, expected 0x9D, got 0x{code:X}"
+                        );
+
+                        unsafe {
+                            IS_PAUSE_BREAK_SEQUENCE = false;
+                            PAUSE_BREAK_SEQUENCE_STEP = 0;
+
+                            _ = &(*ProcessorControlBlock::get_pcb_for_current_processor())
+                                .local_apic
+                                .get()
+                                .unwrap()
+                                .signal_end_of_interrupt();
+                        }
+
+                        return;
+                    }
+                }
+                4 => {
+                    if code == 0xC5 {
+                        unsafe {
+                            PRESSED_KEYS.insert(Key::PauseBreak);
+                        }
+
+                        debug!("[Keyboard] {:?} {:?}", KeyState::Pressed, Key::PauseBreak);
+                    } else {
+                        error!(
+                            "[Keyboard] Invalid pause break sequence, expected 0xC5, got 0x{code:X}"
+                        );
+                    }
+
+                    unsafe {
+                        IS_PAUSE_BREAK_SEQUENCE = false;
+                        PAUSE_BREAK_SEQUENCE_STEP = 0;
+
+                        _ = &(*ProcessorControlBlock::get_pcb_for_current_processor())
+                            .local_apic
+                            .get()
+                            .unwrap()
+                            .signal_end_of_interrupt();
+                    }
+
+                    return;
+                }
+                _ => unreachable!(),
+            }
+
+            unsafe {
                 _ = &(*ProcessorControlBlock::get_pcb_for_current_processor())
                     .local_apic
                     .get()
@@ -116,6 +269,7 @@ extern "x86-interrupt" fn ps2_keyboard_interrupt_handler(
         if unsafe { IS_EXTENDED } {
             if code == 0x2A {
                 unsafe {
+                    IS_EXTENDED = false;
                     IS_PRINT_SCREEN_PRESSED_SEQUENCE = true;
 
                     _ = &(*ProcessorControlBlock::get_pcb_for_current_processor())
@@ -130,6 +284,7 @@ extern "x86-interrupt" fn ps2_keyboard_interrupt_handler(
 
             if code == 0xB7 {
                 unsafe {
+                    IS_EXTENDED = false;
                     IS_PRINT_SCREEN_RELEASED_SEQUENCE = true;
 
                     _ = &(*ProcessorControlBlock::get_pcb_for_current_processor())
@@ -149,10 +304,16 @@ extern "x86-interrupt" fn ps2_keyboard_interrupt_handler(
                     unsafe {
                         IS_PRINT_SCREEN_PRESSED_SEQUENCE = false;
                     }
+
+                    debug!("[Keyboard] {:?} {:?}", KeyState::Pressed, Key::PrintScreen);
                 } else {
                     error!("[Keyboard] Invalid print screen sequence follow up");
 
                     key_press = None;
+
+                    unsafe {
+                        IS_PRINT_SCREEN_PRESSED_SEQUENCE = false;
+                    }
                 }
             } else if unsafe { IS_PRINT_SCREEN_RELEASED_SEQUENCE } {
                 if code == 0xAA {
@@ -161,10 +322,16 @@ extern "x86-interrupt" fn ps2_keyboard_interrupt_handler(
                     unsafe {
                         IS_PRINT_SCREEN_RELEASED_SEQUENCE = false;
                     }
+
+                    debug!("[Keyboard] {:?} {:?}", KeyState::Released, Key::PrintScreen);
                 } else {
                     error!("[Keyboard] Invalid print screen sequence follow up");
 
                     key_press = None;
+
+                    unsafe {
+                        IS_PRINT_SCREEN_RELEASED_SEQUENCE = false;
+                    }
                 }
             } else {
                 key_press = match code {
@@ -593,6 +760,7 @@ pub enum Key {
     ScrollLock,
 
     PrintScreen,
+    PauseBreak,
 
     MultimediaPreviousTrack,
     MultimediaWwwSearch,
