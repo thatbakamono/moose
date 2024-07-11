@@ -68,9 +68,8 @@ impl Rtl8139 {
             }
         }
 
-        // Safety check that device reports I/O address in first BAR.
         let bar0 = pci_device.lock().get_bar(0);
-        assert_eq!(bar0 & 1, 1);
+        assert_eq!(bar0 & 1, 1); // Safety check that device reports I/O address in first BAR.
 
         Self {
             inner: Arc::new(Mutex::new(Rtl8139Inner {
