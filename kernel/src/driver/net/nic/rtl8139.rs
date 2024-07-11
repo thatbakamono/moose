@@ -51,30 +51,22 @@ impl Rtl8139 {
         //
         // 8kb + 1518 bytes (worst case scenario) occupies 3 physical pages.
         // We allocate them manually as we need to explicilty have 3 **physically contiguous** pages.
-        let frame1 = memory_manager.allocate_frame().unwrap();
-        let frame2 = memory_manager.allocate_frame().unwrap();
-        let frame3 = memory_manager.allocate_frame().unwrap();
+        let frames = [
+            memory_manager.allocate_frame().unwrap(),
+            memory_manager.allocate_frame().unwrap(),
+            memory_manager.allocate_frame().unwrap(),
+        ];
 
-        unsafe {
-            memory_manager
-                .map_identity(
-                    &Page::new(VirtualAddress::new(frame1.address().as_u64())),
-                    PageFlags::WRITABLE,
-                )
-                .unwrap();
-            memory_manager
-                .map_identity(
-                    &Page::new(VirtualAddress::new(frame2.address().as_u64())),
-                    PageFlags::WRITABLE,
-                )
-                .unwrap();
-            memory_manager
-                .map_identity(
-                    &Page::new(VirtualAddress::new(frame3.address().as_u64())),
-                    PageFlags::WRITABLE,
-                )
-                .unwrap();
-        };
+        for frame in frames {
+            unsafe {
+                memory_manager
+                    .map_identity(
+                        &Page::new(VirtualAddress::new(frame.address().as_u64())),
+                        PageFlags::WRITABLE,
+                    )
+                    .unwrap();
+            }
+        }
 
         // Safety check that device reports I/O address in first BAR.
         let bar0 = pci_device.lock().get_bar(0);
@@ -84,7 +76,7 @@ impl Rtl8139 {
             inner: Arc::new(Mutex::new(Rtl8139Inner {
                 pci_device,
                 io_base: (bar0 & !0x3) as u16,
-                rx_buffer: frame1.address().as_u64() as *mut u8,
+                rx_buffer: frames[0].address().as_u64() as *mut u8,
                 current_rx_offset: 0,
                 kernel,
                 current_tx_index: 0,
