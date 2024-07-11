@@ -38,6 +38,7 @@ use x86_64::registers::control::{Cr4, Cr4Flags, Efer, EferFlags};
 use crate::arch::irq::{IrqAllocator, IrqLevel};
 use crate::driver::acpi::{Acpi, Rsdp};
 use crate::driver::apic::{Apic, LocalApic};
+use crate::driver::keyboard::KeyboardDriver;
 use crate::driver::pci::Pci;
 use crate::kernel::Kernel;
 use crate::{
@@ -46,7 +47,6 @@ use crate::{
     serial::SerialPort,
     vga::Vga,
 };
-use crate::driver::keyboard::KeyboardDriver;
 
 /// Sets the base revision to the latest revision supported by the crate.
 /// See specification for further info.
@@ -132,10 +132,7 @@ unsafe extern "C" fn _start() -> ! {
     let acpi = Arc::new(Acpi::with_memory_manager(
         rsdp_response.address() as *const Rsdp
     ));
-    let apic = Arc::new(RwLock::new(Apic::initialize(
-        Arc::clone(&acpi),
-        timer_irq,
-    )));
+    let apic = Arc::new(RwLock::new(Apic::initialize(Arc::clone(&acpi), timer_irq)));
 
     let kernel = Arc::new(RwLock::new(Kernel {
         acpi,
@@ -162,8 +159,7 @@ unsafe extern "C" fn _start() -> ! {
 
     (*pcb).local_apic.get().unwrap().enable_timer();
 
-    let keyboard = KeyboardDriver::new(Arc::clone(&kernel));
-    keyboard.init();
+    KeyboardDriver::initialize(&mut kernel.write()).unwrap();
 
     loop {
         asm!("hlt");
