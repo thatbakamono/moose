@@ -280,11 +280,8 @@ impl Rtl8139Inner {
         // 4 is CRC32 checksum appended at the end of the data
         let mut buffer = [0u8; 4 + 1518 + 4];
 
-        for i in 0..length {
-            unsafe {
-                buffer[i as usize] = *(data_start.offset(i.try_into().unwrap()) as *const u8)
-            };
-        }
+        buffer[..length as usize]
+            .copy_from_slice(unsafe { slice::from_raw_parts(data_start, length as usize) });
 
         // @TODO: Pass buffer to the higher layers
 
