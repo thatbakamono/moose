@@ -1,4 +1,5 @@
 use alloc::{boxed::Box, sync::Arc};
+use core::slice;
 use log::debug;
 use raw_cpuid::{CpuId, Hypervisor};
 use spin::{Mutex, RwLock};
