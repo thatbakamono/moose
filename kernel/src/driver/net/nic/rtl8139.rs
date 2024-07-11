@@ -32,12 +32,6 @@ const CONFIG_1_REGISTER: u16 = 0x52;
 const RX_BUFFER_SIZE: usize = (1 << 13) + 1500 + 4 + 4;
 const RX_RING_BUFFER_SIZE: usize = 8192;
 
-#[repr(C, align(4096))]
-struct RxBuffer([u8; RX_BUFFER_SIZE]);
-
-#[repr(C, align(4096))]
-struct TxBuffer([u8; 1518]);
-
 pub struct Rtl8139 {
     inner: Arc<Mutex<Rtl8139Inner>>,
 }
@@ -300,6 +294,12 @@ impl Rtl8139Inner {
 }
 
 unsafe impl Send for Rtl8139Inner {}
+
+#[repr(C, align(4096))]
+struct RxBuffer([u8; RX_BUFFER_SIZE]);
+
+#[repr(C, align(4096))]
+struct TxBuffer([u8; 1518]);
 
 fn handle_rtl8139_interrupt(nic: &mut Rtl8139Inner) {
     let status = inw(nic.io_base + INTERRUPT_STATUS_REGISTER);
