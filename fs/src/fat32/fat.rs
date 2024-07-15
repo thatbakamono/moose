@@ -242,7 +242,11 @@ impl Fat {
     /// - `cluster`: The cluster number from which to read the sectors.
     /// - `buffer`: A mutable slice of bytes where the read data will be stored. The size of the buffer should be sufficient to hold all the data from the cluster.
     ///
-    pub(crate) fn read_cluster_to(&self, cluster: u32, buffer: &mut [u8]) -> Result<(), FileSystemError> {
+    pub(crate) fn read_cluster_to(
+        &self,
+        cluster: u32,
+        buffer: &mut [u8],
+    ) -> Result<(), FileSystemError> {
         assert_eq!(
             self.bpb.bytes_per_sector * (self.bpb.sectors_per_cluster as u16),
             buffer.len() as u16
@@ -523,8 +527,8 @@ impl Fat {
         //        as last LFN entry can have max 13 characters, and if filename still does not fit,
         //        we need to cut it, terminate with null char and fill rest of the name with U+FFFF
         assert!(
-           new_file_entry.raw.len() < 20,
-          "Filename cannot be longer than 255 characters!"
+            new_file_entry.raw.len() < 20,
+            "Filename cannot be longer than 255 characters!"
         );
 
         let occupied_entries = new_file_entry.raw.len();
