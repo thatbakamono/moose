@@ -66,7 +66,7 @@ impl Directory for FatDirectory {
         let filesystem = self.filesystem.borrow();
 
         for cluster in filesystem.get_clusters_for_file(self.content_cluster) {
-            let cluster_entries: Vec<FileSystemEntry> = filesystem
+            filesystem
                 .get_file_listing_from_cluster(cluster)
                 .unwrap()
                 .into_iter()
@@ -87,9 +87,7 @@ impl Directory for FatDirectory {
                         }
                     }
                 })
-                .collect();
-
-            directory_entries.extend(cluster_entries)
+                .collect_into(&mut directory_entries);
         }
 
         directory_entries.into_iter()

@@ -91,14 +91,14 @@ pub(crate) struct BiosParameterBlock {
     sectors_per_cluster: u8,
     reserved_sector_count: u16,
     number_of_fats: u8,
-    #[deku(assert = "*root_entries_count == 0")]
-    root_entries_count: u16, // must be set to 0 in fat32
-    #[deku(assert = "*total_count_of_sectors == 0")]
-    total_count_of_sectors: u16, // must be set to 0 in fat32
+    #[deku(assert = "*root_entries_count == 0")] // see Table `Boot Sector and BPB Structure` at `documents/FAT32 Specification.pdf`, p. 9
+    root_entries_count: u16,
+    #[deku(assert = "*total_count_of_sectors == 0")] // see Table `Boot Sector and BPB Structure` at `documents/FAT32 Specification.pdf`, p. 9
+    total_count_of_sectors: u16,
     #[deku(assert = "[0xF0, 0xF8, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF].contains(media_type)")]
     media_type: u8,
-    #[deku(assert = "*sectors_per_fat == 0")]
-    sectors_per_fat: u16, // must be set to 0 in fat32
+    #[deku(assert = "*sectors_per_fat == 0")] // see Table `Boot Sector and BPB Structure` at `documents/FAT32 Specification.pdf`, p. 9
+    sectors_per_fat: u16,
     sectors_per_track: u16,
     number_of_heads: u16,
     hidden_sectors_count: u32,
@@ -111,8 +111,8 @@ pub(crate) struct BiosParameterBlock {
     boot_sector_copy_sector_number: u16,
     #[deku(pad_bytes_before = "12")]
     drive_number: u8,
-    #[deku(assert = "*boot_signature == 0x29", pad_bytes_before = "1")]
-    boot_signature: u8, // assert 0x29
+    #[deku(assert = "*boot_signature == 0x29", pad_bytes_before = "1")] // see Table `Boot Sector and BPB Structure` at `documents/FAT32 Specification.pdf`, p. 9
+    boot_signature: u8,
     volume_id: u32,
     #[deku(
         map = "|value: [u8; 11]| -> Result<_, DekuError> { Ok(String::from_utf8_lossy(&value[..]).into_owned()) }"
@@ -122,8 +122,8 @@ pub(crate) struct BiosParameterBlock {
         map = "|value: [u8; 8]| -> Result<_, DekuError> { Ok(String::from_utf8_lossy(&value[..]).into_owned()) }"
     )]
     filesystem_type: String,
-    #[deku(assert = "*signature == [0x55, 0xAA]", pad_bytes_before = "420")]
-    signature: [u8; 2], // assert 0x55 0xA
+    #[deku(assert = "*signature == [0x55, 0xAA]", pad_bytes_before = "420")] // see Table `Boot Sector and BPB Structure` at `documents/FAT32 Specification.pdf`, p. 9
+    signature: [u8; 2],
 }
 
 #[derive(Debug)]
@@ -148,7 +148,8 @@ impl FileListing {
         loop {
             let mut processed_slice = remaining_slice;
 
-            // Read name
+            // We need to read the attributes and, based on them, decide whether it is SFN or LFN file entry.
+            // The attributes are right after the filename, so we have to skip it
             for _ in 0..11 {
                 (processed_slice, _) = u8::read(processed_slice, ())?;
             }
@@ -191,7 +192,8 @@ impl RawFileListing {
     fn read_files_raw(
         rest: &BitSlice<u8, Msb0>,
     ) -> Result<(&BitSlice<u8, Msb0>, Vec<RawFatFileEntry>), DekuError> {
-        let mut buffer: Vec<RawFatFileEntry> = vec![];
+        let buffer_size = (rest.len() * 8) / size_of::<RawFatFileEntry>();
+        let mut buffer: Vec<RawFatFileEntry> = Vec::with_capacity(buffer_size);
         let mut remaining_slice = rest;
 
         loop {
@@ -242,7 +244,7 @@ pub(crate) struct LongFileNameFatEntry {
 pub(crate) struct RawFatFileEntry {
     name: [u8; 11],
     attr: u8,
-    nt_res: u8,
+    nt_res: u8, // actually it's NT reserved field, but specification mentions it as `nt_res`. For more info see Table `Fat32 Byte Directory Entry Structure` at `documents/FAT32 Specification.pdf`, p. 23
     creation_time_milliseconds: u8,
     creation_time: u16,
     creation_date: u16,
@@ -313,14 +315,22 @@ impl FatFileEntry {
         let binding = LongFileName::padded_sfn(&self.name);
         let bytes = binding.as_bytes();
 
-        self.raw[0].name = bytes[0..11]
-            .bytes()
-            .try_collect::<Vec<u8>>()
-            .unwrap()
-            .try_into()
-            .unwrap();
+        self.raw[0].name = bytes[0..11].to_vec().try_into().unwrap();
 
-        let lfn_name_length = ucs2::str_num_ucs2_chars(self.name.as_str()).unwrap();
+        let mut lfn_checksum = 0;
+        for i in 11..0 {
+            let checksum_copy = lfn_checksum;
+
+            if (checksum_copy & 1) == 1 {
+                lfn_checksum = 0x80;
+            } else {
+                lfn_checksum = 0;
+            }
+
+            lfn_checksum += (checksum_copy >> 1) + self.raw[0].name[11 - i];
+        }
+
+        let lfn_name_length = ucs2::str_num_ucs2_chars(&self.name).unwrap();
         let lfn_name_buffer_length = (lfn_name_length / 13) * 13 + 13;
         let mut lfn_buffer: Vec<u16> = vec![0u16; lfn_name_buffer_length];
         ucs2::encode(self.name.as_str(), lfn_buffer.as_mut_slice()).unwrap();
@@ -340,7 +350,7 @@ impl FatFileEntry {
                         | FatFileAttributes::VOLUME_ID)
                         .bits(),
                     reserved: 0,
-                    checksum: 0, // @TODO: Checksum of SFN entry
+                    checksum: lfn_checksum,
                     name2: ucs2_part[5..11].try_into().unwrap(),
                     first_cluster_low: 0,
                     name3: ucs2_part[11..=12].try_into().unwrap(),
@@ -401,11 +411,11 @@ impl FatFileEntry {
         self.creation_time
     }
 
-    pub fn last_access_time(&self) -> NaiveDateTime {
+    pub fn last_access_date_time(&self) -> NaiveDateTime {
         self.last_access_time
     }
 
-    pub fn last_write_time(&self) -> NaiveDateTime {
+    pub fn last_write_date_time(&self) -> NaiveDateTime {
         self.last_write_time
     }
 
@@ -422,6 +432,9 @@ impl FatFileEntry {
     }
 
     fn create_datetime_from_fields(date: FatDateFormat, time: FatTimeFormat) -> NaiveDateTime {
+        // For the FAT's format of encoding datetime, see
+        // `Date and Time Formats` at `documents/FAT32 Specification.pdf`, p. 25
+
         NaiveDateTime::default()
             .with_year(1980 + date.year() as i32)
             .unwrap()
@@ -438,6 +451,9 @@ impl FatFileEntry {
     }
 
     fn create_fields_from_datetime(date_time: &NaiveDateTime) -> (FatDateFormat, FatTimeFormat) {
+        // For the FAT's format of encoding datetime, see
+        // `Date and Time Formats` at `documents/FAT32 Specification.pdf`, p. 25
+
         let mut fat_date = FatDateFormat::default()
             .with_day(date_time.day() as u8)
             .with_month(date_time.month() as u8)
@@ -582,6 +598,12 @@ impl DekuRead<'_> for FatFileAttributes {
     }
 }
 
+/// Date Format. A FAT directory entry date stamp is a 16-bit field that is basically a date relative to the
+/// MS-DOS epoch of 01/01/1980. Here is the format (bit 0 is the LSB of the 16-bit word, bit 15 is the
+/// MSB of the 16-bit word):
+/// Bits 0–4: Day of month, valid value range 1-31 inclusive.
+/// Bits 5–8: Month of year, 1 = January, valid value range 1–12 inclusive.
+/// Bits 9–15: Count of years from 1980, valid value range 0–127 inclusive (1980–2107).
 #[bitfield(u16)]
 struct FatDateFormat {
     #[bits(5)]
@@ -592,6 +614,11 @@ struct FatDateFormat {
     pub year: u8,
 }
 
+/// Time Format. A FAT directory entry time stamp is a 16-bit field that has a granularity of 2 seconds.
+/// Here is the format (bit 0 is the LSB of the 16-bit word, bit 15 is the MSB of the 16-bit word).
+/// Bits 0–4: 2-second count, valid value range 0–29 inclusive (0 – 58 seconds).
+/// Bits 5–10: Minutes, valid value range 0–59 inclusive.
+/// Bits 11–15: Hours, valid value range 0–23 inclusive.
 #[bitfield(u16)]
 struct FatTimeFormat {
     #[bits(5)]
@@ -834,7 +861,7 @@ mod tests {
         let current_time = Utc::now().naive_utc();
 
         assert_eq!(
-            file.creation_date_time(),
+            file.creation_datetime(),
             NaiveDateTime::parse_from_str("2024-06-16 15:06:04", "%Y-%m-%d %H:%M:%S").unwrap()
         );
         assert_eq!(
@@ -854,14 +881,14 @@ mod tests {
 
         assert!(
             file2
-                .creation_date_time()
+                .creation_datetime()
                 .signed_duration_since(current_time)
                 .num_seconds()
                 <= 3
         );
         assert!(
             file2
-                .modification_date_time()
+                .modification_datetime()
                 .signed_duration_since(current_time)
                 .num_seconds()
                 <= 3

@@ -40,7 +40,7 @@ impl LongFileName {
 
         if filename.is_empty() && !extension.is_empty() {
             // Special case of dot at the first index
-            // Need to set the lossy flag and set filename to
+            // Need to set the lossy flag and set filename to everything after first character
             lossy = true;
 
             filename = String::from_utf8_lossy(&lfn.as_bytes()[1..]).to_string();

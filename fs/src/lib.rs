@@ -3,9 +3,10 @@
 //! Contains definitions of FileSystem, File and Directory traits and mutual errors and attributes
 #![allow(unused)]
 #![feature(iter_array_chunks)]
-#![feature(slice_pattern)]
+#![feature(iter_collect_into)]
 #![feature(iter_intersperse)]
 #![feature(iterator_try_collect)]
+#![feature(slice_pattern)]
 
 extern crate core;
 
@@ -77,10 +78,10 @@ pub trait File: Sized {
     fn file_size(&self) -> usize;
 
     /// Returns the creation datetime of the file.
-    fn creation_date_time(&self) -> NaiveDateTime;
+    fn creation_datetime(&self) -> NaiveDateTime;
 
     /// Returns the modification datetime of the file.
-    fn modification_date_time(&self) -> NaiveDateTime;
+    fn modification_datetime(&self) -> NaiveDateTime;
 
     /// Returns the attributes of the file.
     fn attributes(&self) -> Attributes;

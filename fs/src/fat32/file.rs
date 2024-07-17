@@ -324,11 +324,11 @@ impl File for FatFile {
         self.file_entry.file_size as usize
     }
 
-    fn creation_date_time(&self) -> NaiveDateTime {
+    fn creation_datetime(&self) -> NaiveDateTime {
         self.file_entry.creation_time
     }
 
-    fn modification_date_time(&self) -> NaiveDateTime {
+    fn modification_datetime(&self) -> NaiveDateTime {
         self.file_entry.last_write_time
     }
 
