@@ -27,7 +27,7 @@ impl FatDirectory {
         }
 
         // @TODO: NOSTD
-        let current_time = Utc::now().naive_utc();
+        let current_time = fat.current_datetime();
         let cluster = fat.allocate_and_link_clusters(1)?.next().unwrap().0;
 
         let raw_file_entry = RawFatFileEntry::default();

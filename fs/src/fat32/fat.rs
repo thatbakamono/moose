@@ -21,8 +21,7 @@ use crate::{Directory, FileSystem, FileSystemEntry, FileSystemError};
 use super::directory::FatDirectory;
 use super::file::FatFile;
 use super::{
-    BiosParameterBlock, FatDataSource, FatDateFormat, FatEntry, FatTimeFormat, FileListing,
-    RawFatFileEntry, Sector,
+    BiosParameterBlock, FatDataSource, FatDateFormat, FatEntry, FatTimeFormat, FatTimeSource, FileListing, RawFatFileEntry, Sector
 };
 
 const FAT_FREE_ENTRY: u8 = 0xE5;
@@ -30,6 +29,7 @@ const FAT_SHORT_FILE_NAME_LENGTH: usize = 11;
 
 pub struct Fat {
     data_source: Arc<Mutex<dyn FatDataSource>>,
+    time_source: Arc<Mutex<dyn FatTimeSource>>,
     partition_first_sector_lba: u32,
     sectors: u32,
     pub(crate) bpb: BiosParameterBlock,
@@ -39,6 +39,7 @@ pub struct Fat {
 impl Fat {
     pub fn new(
         data_source: Arc<Mutex<dyn FatDataSource>>,
+        time_source: Arc<Mutex<dyn FatTimeSource>>,
         partition_first_sector_lba: u32,
         sectors: u32,
     ) -> Rc<RefCell<Self>> {
@@ -46,6 +47,7 @@ impl Fat {
 
         let mut fat = Self {
             data_source,
+            time_source,
             partition_first_sector_lba,
             sectors,
             bpb,
@@ -817,6 +819,18 @@ impl Fat {
         } else {
             Ok((first_new_cluster as u32, 0))
         }
+    }
+
+    /// Retrieves the current date and time.
+    ///
+    /// This method obtains the current date and time from the time source encapsulated
+    /// within the struct.
+    ///
+    /// # Returns
+    ///
+    /// A `NaiveDateTime` representing the current date and time.
+    pub fn current_datetime(&self) -> NaiveDateTime {
+        self.time_source.lock().unwrap().now()
     }
 }
 

@@ -79,6 +79,18 @@ pub trait FatDataSource {
     fn write_sector(&mut self, starting_sector: u32, buffer: &[u8]) -> Result<(), FileSystemError>;
 }
 
+/// A trait for retrieving the current date and time.
+pub trait FatTimeSource {
+    /// The `now` function provides a way to get the current date and time
+    /// from the underlying time source. The returned `NaiveDateTime` does not
+    /// contain any timezone information.
+    ///
+    /// # Returns
+    ///
+    /// * `NaiveDateTime` - The current date and time.
+    fn now(&self) -> NaiveDateTime;
+}
+
 // BPB definition
 #[derive(DekuRead, Debug)]
 pub(crate) struct BiosParameterBlock {
@@ -651,7 +663,7 @@ mod tests {
     };
 
     use super::{
-        FatDataSource, FatDateFormat, FatTimeFormat, Sector, FAT_SECTOR_SIZE, IMAGE1_DATA,
+        FatDataSource, FatDateFormat, FatTimeFormat, FatTimeSource, Sector, FAT_SECTOR_SIZE, IMAGE1_DATA
     };
 
     struct FileFatDataSource {
@@ -722,6 +734,13 @@ mod tests {
         }
     }
 
+    struct StdFatTimeSource {}
+    impl FatTimeSource for StdFatTimeSource {
+        fn now(&self) -> NaiveDateTime {
+            Utc::now().naive_utc()
+        }
+    }
+
     fn setup_fat() -> Rc<RefCell<Fat>> {
         let mut vec = Vec::with_capacity(IMAGE1_DATA.len());
         vec.extend_from_slice(IMAGE1_DATA);
@@ -729,6 +748,7 @@ mod tests {
         let data_source = InMemoryFatDataSource { data: vec };
         Fat::new(
             Arc::new(Mutex::new(data_source)),
+            Arc::new(Mutex::new(StdFatTimeSource {})),
             0,
             (IMAGE1_DATA.len() / FAT_SECTOR_SIZE) as u32,
         )
