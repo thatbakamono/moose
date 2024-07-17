@@ -26,7 +26,6 @@ impl FatDirectory {
             return Err(FileSystemError::TooLongName);
         }
 
-        // @TODO: NOSTD
         let current_time = fat.current_datetime();
         let cluster = fat.allocate_and_link_clusters(1)?.next().unwrap().0;
 
