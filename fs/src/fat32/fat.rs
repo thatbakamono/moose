@@ -1,38 +1,31 @@
 use bitvec::prelude::*;
-use bytemuck::{cast, cast_mut, cast_slice, cast_slice_mut};
-use chrono::{Datelike, NaiveDateTime, Timelike};
+use bytemuck::{cast, cast_slice, cast_slice_mut};
+use chrono::NaiveDateTime;
 use deku::DekuWrite;
-use libm::round;
-use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::ffi::CStr;
-use std::io::Write;
-use std::mem::size_of;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use crate::fat32::lfn::LongFileName;
-use crate::fat32::FatEntry::LongFileNameEntry;
+use crate::{FileSystem, FileSystemError};
 use crate::fat32::{
-    FatFileAttributes, FatFileEntry, LongFileNameFatEntry, RawFileListing, FAT_SECTOR_SIZE,
+    FatFileAttributes, FatFileEntry, RawFileListing, FAT_SECTOR_SIZE,
 };
-use crate::{Directory, FileSystem, FileSystemEntry, FileSystemError};
 
 use super::directory::FatDirectory;
 use super::file::FatFile;
 use super::{
-    BiosParameterBlock, FatDataSource, FatDateFormat, FatEntry, FatTimeFormat, FatTimeSource,
+    BiosParameterBlock, FatDataSource, FatEntry, FatTimeSource,
     FileListing, RawFatFileEntry, Sector,
 };
 
 const FAT_FREE_ENTRY: u8 = 0xE5;
-const FAT_SHORT_FILE_NAME_LENGTH: usize = 11;
 
 pub struct Fat {
     data_source: Arc<Mutex<dyn FatDataSource>>,
     time_source: Arc<Mutex<dyn FatTimeSource>>,
     partition_first_sector_lba: u32,
-    sectors: u32,
+    _sectors: u32,
     pub(crate) bpb: BiosParameterBlock,
     pub(crate) file_allocation_table: Vec<u32>,
 }
@@ -50,12 +43,12 @@ impl Fat {
             data_source,
             time_source,
             partition_first_sector_lba,
-            sectors,
+            _sectors: sectors,
             bpb,
             file_allocation_table: Vec::new(),
         };
 
-        fat.init();
+        fat.init().unwrap();
 
         Rc::new(RefCell::new(fat))
     }
@@ -145,7 +138,7 @@ impl Fat {
 
         for entry in file_listing.files {
             match entry {
-                FatEntry::FileEntry(mut file) => {
+                FatEntry::FileEntry(file) => {
                     // Last entry, don't read more
                     if file.name == [0u8; 11] {
                         break;
@@ -182,7 +175,7 @@ impl Fat {
 
                     index += ucs2::decode(&name1, &mut buffer[index..]).unwrap();
                     index += ucs2::decode(&name2, &mut buffer[index..]).unwrap();
-                    index += ucs2::decode(&name3, &mut buffer[index..]).unwrap();
+                    ucs2::decode(&name3, &mut buffer[index..]).unwrap();
 
                     name.insert_str(
                         0,
@@ -217,7 +210,7 @@ impl Fat {
                 self.data_source.lock().unwrap().read_sectors_to(
                     self.partition_first_sector_lba + first_sector_lba + i,
                     &mut sectors[(i as usize)..((i + 1) as usize)],
-                );
+                )?;
             }
 
             return Ok(sectors);
@@ -445,7 +438,7 @@ impl Fat {
         if path.is_empty() {
             // Root directory
             let mut file_entry = FatFileEntry::default();
-            let mut raw_file_entry = RawFatFileEntry {
+            let raw_file_entry = RawFatFileEntry {
                 first_cluster_low: cluster as u16,
                 ..Default::default()
             };
@@ -468,8 +461,8 @@ impl Fat {
 
                 for file in listing.iter() {
                     if file.name.eq(subdirectory) {
-                        cluster = (((file.sfn().first_cluster_high as u32) << 16)
-                            | file.sfn().first_cluster_low as u32);
+                        cluster = ((file.sfn().first_cluster_high as u32) << 16)
+                            | file.sfn().first_cluster_low as u32;
 
                         if index == segments - 1 {
                             // Found
@@ -499,7 +492,7 @@ impl Fat {
         directory: &FatDirectory,
         current_entry_cluster: u32,
     ) {
-        self.remove_file_entry(file_entry, current_entry_cluster);
+        self.remove_file_entry(file_entry, current_entry_cluster).unwrap();
 
         self.serialize_file_entry(None, file_entry, directory.content_cluster);
     }
@@ -523,7 +516,7 @@ impl Fat {
         directory_cluster: u32,
     ) -> u32 {
         if let Some(entry) = old_file_entry {
-            self.remove_file_entry(entry, directory_cluster);
+            self.remove_file_entry(entry, directory_cluster).unwrap();
         }
 
         // @TODO: Technically we can support 20 LFN entries, but this requires some special handling,
@@ -543,7 +536,7 @@ impl Fat {
                     .unwrap()
             });
 
-        self.write_file_entry(new_file_entry, cluster, first_entry_index);
+        self.write_file_entry(new_file_entry, cluster, first_entry_index).unwrap();
 
         cluster
     }
@@ -612,7 +605,7 @@ impl Fat {
             let size = file_listing.len();
 
             // @TODO: Maybe optimize writes?
-            for (index, mut entry) in file_listing.clone().into_iter().rev().enumerate() {
+            for (index, entry) in file_listing.clone().into_iter().rev().enumerate() {
                 if entry.name == file_entry.raw[0].name {
                     // found
 
@@ -622,7 +615,7 @@ impl Fat {
                     file_listing[size - index - 1].name[0] = FAT_FREE_ENTRY;
 
                     // Save modified listing to the disk
-                    self.save_listing_to_the_disk(cluster, &file_listing);
+                    self.save_listing_to_the_disk(cluster, &file_listing)?;
 
                     if !is_lfn {
                         // Our job is done here because it's single entry
@@ -643,7 +636,7 @@ impl Fat {
                         file_listing[size - index - 1].name[0] = FAT_FREE_ENTRY;
 
                         // Save modified listing to the disk
-                        self.save_listing_to_the_disk(cluster, &file_listing);
+                        self.save_listing_to_the_disk(cluster, &file_listing)?;
                     } else {
                         break;
                     }
@@ -702,7 +695,6 @@ impl Fat {
     ) -> Option<(u32, usize)> {
         assert!(n < 20);
 
-        let mut found_free_entry = false;
         let mut currently_contiguous_entries_count = 0;
         let mut currently_contiguous_chain_starting_index = -1i32;
 
@@ -722,7 +714,6 @@ impl Fat {
                         currently_contiguous_chain_starting_index = idx as i32;
                     }
 
-                    found_free_entry = true;
                     currently_contiguous_entries_count += 1;
 
                     if currently_contiguous_entries_count == n {
@@ -730,7 +721,6 @@ impl Fat {
                     }
                 } else {
                     // It's not 0x00 nor FREE_ENTRY mark, so probably a valid entry
-                    found_free_entry = false;
                     currently_contiguous_entries_count = 0;
                     currently_contiguous_chain_starting_index = -1;
                 }
@@ -801,10 +791,6 @@ impl Fat {
         }
 
         // There's no sufficient entries in directory so need to allocate some
-        let allocation_need = n - chain_size;
-        let allocation_cluster_count =
-            round((allocation_need / size_of::<RawFatFileEntry>()) as f64) as usize;
-
         let current_last_cluster = clusters.last().unwrap();
         let first_new_cluster = self
             .allocate_and_link_clusters(1)

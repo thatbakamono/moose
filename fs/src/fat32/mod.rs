@@ -6,34 +6,22 @@ pub mod lfn;
 use bitfield_struct::bitfield;
 use bitflags::bitflags;
 use bitvec::prelude::*;
-use chrono::{DateTime, Datelike, NaiveDateTime, Timelike};
-use core::ffi::CStr;
+use chrono::{Datelike, NaiveDateTime, Timelike};
 use deku::{DekuContainerWrite, DekuError, DekuRead, DekuUpdate, DekuWrite};
-use pretty_hex::pretty_hex;
 
 use core::clone::Clone;
 use core::cmp::PartialEq;
 use core::convert::From;
-use core::convert::TryFrom;
 use core::default::Default;
-use core::iter::IntoIterator;
 use core::iter::Iterator;
 use core::marker::Sized;
 use core::result::Result;
 use core::result::Result::Ok;
 
-use bytemuck::{cast, cast_slice, Pod, Zeroable};
-use libm::ceil;
+use bytemuck::{cast, Pod, Zeroable};
 #[cfg(feature = "no_std")]
 use spin::Mutex;
-use std::borrow::Cow;
-#[cfg(not(feature = "no_std"))]
-use std::{
-    rc::Rc,
-    sync::{Arc, Mutex},
-};
 
-use crate::fat32::file::FatFile;
 extern crate alloc;
 use crate::fat32::lfn::LongFileName;
 use crate::{Attributes, FileSystemError};
@@ -45,7 +33,6 @@ use alloc::{
     vec::Vec,
     {format, vec},
 };
-use std::io::Read;
 
 /// Defines FAT sector size in bytes. It's independent of underlying storage medium sector size.
 pub const FAT_SECTOR_SIZE: usize = 512;
@@ -92,6 +79,7 @@ pub trait FatTimeSource {
 }
 
 // BPB definition
+#[allow(dead_code)]
 #[derive(DekuRead, Debug)]
 pub(crate) struct BiosParameterBlock {
     jmp_boot: [u8; 3],
@@ -274,22 +262,22 @@ pub(crate) struct RawFatFileEntry {
 }
 
 impl DekuWrite for RawFatFileEntry {
-    fn write(&self, output: &mut BitVec<u8, Msb0>, ctx: ()) -> Result<(), DekuError> {
+    fn write(&self, output: &mut BitVec<u8, Msb0>, _ctx: ()) -> Result<(), DekuError> {
         for byte in self.name {
             byte.write(output, ())?;
         }
 
-        self.attr.write(output, ());
-        self.nt_res.write(output, ());
-        self.creation_time_milliseconds.write(output, ());
-        self.creation_time.write(output, ());
-        self.creation_date.write(output, ());
-        self.last_access_date.write(output, ());
-        self.first_cluster_high.write(output, ());
-        self.last_write_time.write(output, ());
-        self.last_write_date.write(output, ());
-        self.first_cluster_low.write(output, ());
-        self.file_size.write(output, ());
+        self.attr.write(output, ()).unwrap();
+        self.nt_res.write(output, ()).unwrap();
+        self.creation_time_milliseconds.write(output, ()).unwrap();
+        self.creation_time.write(output, ()).unwrap();
+        self.creation_date.write(output, ()).unwrap();
+        self.last_access_date.write(output, ()).unwrap();
+        self.first_cluster_high.write(output, ()).unwrap();
+        self.last_write_time.write(output, ()).unwrap();
+        self.last_write_date.write(output, ()).unwrap();
+        self.first_cluster_low.write(output, ()).unwrap();
+        self.file_size.write(output, ()).unwrap();
 
         Ok(())
     }
@@ -344,7 +332,7 @@ impl FatFileEntry {
                 lfn_checksum = 0;
             }
 
-            lfn_checksum.wrapping_add((checksum_copy >> 1) + self.raw[0].name[10 - i]);
+            lfn_checksum = lfn_checksum.wrapping_add((checksum_copy >> 1) + self.raw[0].name[10 - i]);
         }
 
         let lfn_name_length = ucs2::str_num_ucs2_chars(&self.name).unwrap();
@@ -440,10 +428,6 @@ impl FatFileEntry {
         self.file_size
     }
 
-    pub(crate) fn raw(&self) -> &Vec<RawFatFileEntry> {
-        &self.raw
-    }
-
     pub(crate) fn sfn(&self) -> &RawFatFileEntry {
         self.raw.first().unwrap()
     }
@@ -471,12 +455,12 @@ impl FatFileEntry {
         // For the FAT's format of encoding datetime, see
         // `Date and Time Formats` at `documents/FAT32 Specification.pdf`, p. 25
 
-        let mut fat_date = FatDateFormat::default()
+        let fat_date = FatDateFormat::default()
             .with_day(date_time.day() as u8)
             .with_month(date_time.month() as u8)
             .with_year((date_time.year() - 1980) as u8);
 
-        let mut fat_time = FatTimeFormat::default()
+        let fat_time = FatTimeFormat::default()
             .with_hours(date_time.hour() as u8)
             .with_minutes(date_time.minute() as u8)
             .with_seconds((date_time.second() / 2) as u8);
@@ -605,7 +589,7 @@ impl From<FatFileAttributes> for Attributes {
 }
 
 impl DekuRead<'_> for FatFileAttributes {
-    fn read(input: &BitSlice<u8, Msb0>, ctx: ()) -> Result<(&BitSlice<u8, Msb0>, Self), DekuError>
+    fn read(input: &BitSlice<u8, Msb0>, _ctx: ()) -> Result<(&BitSlice<u8, Msb0>, Self), DekuError>
     where
         Self: Sized,
     {
@@ -650,15 +634,10 @@ static IMAGE1_DATA: &[u8] = include_bytes!("../../assets/test1.img");
 
 #[cfg(test)]
 mod tests {
-    use bytemuck::cast_slice;
-    use chrono::{Datelike, NaiveDateTime, Utc};
-    use libm::{ceil, exp, round};
-    use log::debug;
+    use chrono::{NaiveDateTime, Utc};
     use std::cell::RefCell;
-    use std::fmt::format;
     use std::fs::File;
     use std::io::{Read, Seek, SeekFrom, Write};
-    use std::path::Path;
     use std::rc::Rc;
     use std::sync::{Arc, Mutex};
 
@@ -668,7 +647,7 @@ mod tests {
     };
 
     use super::{
-        FatDataSource, FatDateFormat, FatTimeFormat, FatTimeSource, Sector, FAT_SECTOR_SIZE,
+        FatDataSource, FatTimeSource, Sector, FAT_SECTOR_SIZE,
         IMAGE1_DATA,
     };
 
@@ -683,10 +662,9 @@ mod tests {
             buffer: &mut [Sector],
         ) -> Result<(), FileSystemError> {
             let starting_offset = starting_sector * FAT_SECTOR_SIZE as u32;
-            let n = buffer.len() * FAT_SECTOR_SIZE;
 
-            self.file.seek(SeekFrom::Start(starting_offset as u64));
-            let read = self.file.read_exact(buffer.as_flattened_mut());
+            self.file.seek(SeekFrom::Start(starting_offset as u64)).unwrap();
+            self.file.read_exact(buffer.as_flattened_mut()).unwrap();
 
             Ok(())
         }
@@ -838,7 +816,7 @@ mod tests {
             "Long filename",
         ];
         let dir_path = "".to_string();
-        let mut dir = fat.open_directory(&dir_path).unwrap();
+        let mut dir = fat.open_directory(&dir_path)?;
 
         dir.create_directory("Long directory name".to_string(), Attributes::READ_ONLY)?;
         dir.create_file("Long filename".to_string(), Attributes::READ_ONLY)?;
@@ -864,7 +842,7 @@ mod tests {
             "file1".to_string(),
             Attributes::HIDDEN | Attributes::SYSTEM_FILE,
         )?;
-        dir.create_directory("dir1".to_string(), Attributes::DIRECTORY);
+        dir.create_directory("dir1".to_string(), Attributes::DIRECTORY)?;
 
         let file = fat.open_file("file1")?;
         let directory = fat.open_directory("dir1")?;
@@ -895,11 +873,11 @@ mod tests {
             NaiveDateTime::parse_from_str("2024-06-16 15:06:04", "%Y-%m-%d %H:%M:%S").unwrap()
         );
 
-        file.set_creation_datetime(current_time);
-        file.set_modification_datetime(current_time);
+        file.set_creation_datetime(current_time)?;
+        file.set_modification_datetime(current_time)?;
 
-        directory.set_creation_datetime(current_time);
-        directory.set_modification_datetime(current_time);
+        directory.set_creation_datetime(current_time)?;
+        directory.set_modification_datetime(current_time)?;
 
         // re-read file information from the disk
         let file2 = fat.open_file("books/english/macbeth.txt")?;
@@ -945,8 +923,8 @@ mod tests {
         let mut file = fat.open_file("books/polish/pan-tadeusz.txt")?;
         let mut directory = fat.open_directory("books/english")?;
 
-        file.set_attributes(Attributes::SYSTEM_FILE);
-        directory.set_attributes(Attributes::HIDDEN | Attributes::DIRECTORY);
+        file.set_attributes(Attributes::SYSTEM_FILE)?;
+        directory.set_attributes(Attributes::HIDDEN | Attributes::DIRECTORY)?;
 
         // Re-read files from the disk
         let file2 = fat.open_file("books/polish/pan-tadeusz.txt")?;
@@ -965,14 +943,14 @@ mod tests {
     fn test_rename() -> Result<(), FileSystemError> {
         let fat = setup_fat();
 
-        let mut file1 = fat.open_file("fruits/random things/random2/Methamphetamine.txt")?;
-        let mut dir1 = fat.open_directory("filesystems/Resilient File System")?;
+        let mut file = fat.open_file("fruits/random things/random2/Methamphetamine.txt")?;
+        let mut dir = fat.open_directory("filesystems/Resilient File System")?;
 
-        file1.rename("meth.txt");
-        dir1.rename("ReFS");
+        file.rename("meth.txt")?;
+        dir.rename("ReFS")?;
 
-        let mut file2 = fat.open_file("fruits/random things/random2/meth.txt")?;
-        let mut dir2 = fat.open_directory("filesystems/ReFS")?;
+        fat.open_file("fruits/random things/random2/meth.txt")?;
+        fat.open_directory("filesystems/ReFS")?;
 
         Ok(())
     }
@@ -984,11 +962,10 @@ mod tests {
         let mut file1 = fat.open_file("fruits/random things/random2/File Allocation Table.txt")?;
         let destination_directory = fat.open_directory("filesystems/File Allocation Table")?;
 
-        file1.move_to(&destination_directory);
+        file1.move_to(&destination_directory)?;
 
-        let mut file2 =
-            fat.open_file("filesystems/File Allocation Table/File Allocation Table.txt")?;
-        let mut file3 = fat.open_file("fruits/random things/random2/File Allocation Table.txt");
+        fat.open_file("filesystems/File Allocation Table/File Allocation Table.txt")?;
+        let file3 = fat.open_file("fruits/random things/random2/File Allocation Table.txt");
 
         let entries: Vec<String> = destination_directory
             .entries()
@@ -1018,7 +995,7 @@ mod tests {
 
         let destination_directory = fat.open_directory("books")?;
 
-        directory.move_to(&destination_directory);
+        directory.move_to(&destination_directory)?;
 
         let directory2 = fat.open_directory("books/fruits")?;
         let entries: Vec<FileSystemEntry> = directory2.entries().collect();
@@ -1033,7 +1010,7 @@ mod tests {
         let fat = setup_fat();
 
         let mut file = fat.open_file("lorem_ipsum.txt")?;
-        file.delete();
+        file.delete()?;
 
         let directory = fat.open_directory("")?;
         let entries: Vec<String> = directory
@@ -1052,7 +1029,7 @@ mod tests {
         let fat = setup_fat();
 
         let mut directory = fat.open_directory("fruits")?;
-        directory.delete();
+        directory.delete()?;
 
         let directory = fat.open_directory("fruits");
 
@@ -1067,12 +1044,10 @@ mod tests {
 
         let mut file = fat.open_file("fruits/STRAWBERRY.TXT")?;
         let buffer = "Test";
-        unsafe {
-            file.write(3, buffer.as_bytes());
-        }
+        file.write(3, buffer.as_bytes())?;
 
         let mut buffer2 = [0u8; 7];
-        file.read(0, &mut buffer2[..]);
+        file.read(0, &mut buffer2[..])?;
 
         assert_eq!(String::from_utf8_lossy(&buffer2), "STRTest");
 
@@ -1083,10 +1058,10 @@ mod tests {
     fn test_file_shrink_in_the_same_cluster() -> Result<(), FileSystemError> {
         let fat = setup_fat();
         let mut file = fat.open_file("fruits/random things/random2/AxelF.txt")?;
-        file.shrink(file.file_size() - 11); // 1811 - 11 = 1800
+        file.shrink(file.file_size() - 11)?; // 1811 - 11 = 1800
 
         let mut buffer = [0u8; 8];
-        file.read(1800 - 8, &mut buffer[..]);
+        file.read(1800 - 8, &mut buffer[..])?;
 
         assert_eq!(String::from_utf8_lossy(&buffer), "Shoot Ou");
         assert!(file.read(1805, &mut buffer[..]).is_err());
@@ -1098,10 +1073,10 @@ mod tests {
     fn test_file_shrink_in_another_cluster() -> Result<(), FileSystemError> {
         let fat = setup_fat();
         let mut file = fat.open_file("fruits/random things/random2/Till Lindemann.txt")?;
-        file.shrink(0x168A);
+        file.shrink(0x168A)?;
 
         let mut buffer = [0u8; 14];
-        file.read(0x168A - 14, &mut buffer[..]);
+        file.read(0x168A - 14, &mut buffer[..])?;
 
         assert_eq!(String::from_utf8_lossy(&buffer), "Ich tu dir weh");
         assert!(file.read(0x168A + 2, &mut buffer[..]).is_err());

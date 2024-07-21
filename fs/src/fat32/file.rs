@@ -1,12 +1,11 @@
 use chrono::NaiveDateTime;
-use core::slice::SlicePattern;
 use libm::ceil;
 use std::cell::RefCell;
 use std::cmp::min;
 use std::rc::Rc;
 
 use crate::fat32::directory::FatDirectory;
-use crate::fat32::{FatFileAttributes, FatFileEntry, RawFatFileEntry};
+use crate::fat32::{FatFileAttributes, FatFileEntry};
 use crate::{Attributes, File, FileSystemError};
 
 use super::fat::Fat;
@@ -52,12 +51,12 @@ impl File for FatFile {
             if offset_within_cluster == 0 {
                 if copy_size < cluster_size {
                     let mut temp_buffer: Vec<u8> = vec![0; cluster_size];
-                    let mut temp_slice = temp_buffer.as_mut_slice();
+                    let temp_slice = temp_buffer.as_mut_slice();
 
                     // Copy whole cluster to the temporary buffer
                     self.filesystem
                         .borrow()
-                        .read_cluster_to(cluster, temp_slice);
+                        .read_cluster_to(cluster, temp_slice)?;
 
                     // Copy from temporary_buffer[offset:] to the user supplied buffer
                     buffer[reading_offset..(reading_offset + copy_size)]
@@ -72,19 +71,19 @@ impl File for FatFile {
                     self.filesystem.borrow().read_cluster_to(
                         cluster,
                         &mut buffer[reading_offset..(reading_offset + cluster_size)],
-                    );
+                    )?;
 
                     to_read -= cluster_size;
                     reading_offset += cluster_size;
                 }
             } else {
                 let mut temp_buffer: Vec<u8> = vec![0; cluster_size];
-                let mut temp_slice = temp_buffer.as_mut_slice();
+                let temp_slice = temp_buffer.as_mut_slice();
 
                 // Copy whole cluster to the temporary buffer
                 self.filesystem
                     .borrow()
-                    .read_cluster_to(cluster, temp_slice);
+                    .read_cluster_to(cluster, temp_slice)?;
 
                 // Copy from temporary_buffer[offset:] to the user supplied buffer
                 buffer[reading_offset..(reading_offset + copy_size)].copy_from_slice(
@@ -132,19 +131,19 @@ impl File for FatFile {
             if offset_within_cluster == 0 {
                 if copy_size < cluster_size {
                     let mut temp_buffer: Vec<u8> = vec![0; cluster_size];
-                    let mut temp_slice = temp_buffer.as_mut_slice();
+                    let temp_slice = temp_buffer.as_mut_slice();
 
                     // Copy whole cluster to the temporary buffer
                     self.filesystem
                         .borrow()
-                        .read_cluster_to(cluster, temp_slice);
+                        .read_cluster_to(cluster, temp_slice)?;
 
                     // Overwrite read cluster with user supplied data starting at the writing_offset
                     temp_slice[0..copy_size]
                         .copy_from_slice(&buffer[writing_offset..(writing_offset + copy_size)]);
 
                     // Write cluster to the disk
-                    self.filesystem.borrow().write_cluster(cluster, temp_slice);
+                    self.filesystem.borrow().write_cluster(cluster, temp_slice)?;
 
                     to_write -= copy_size;
                     writing_offset += copy_size;
@@ -155,26 +154,26 @@ impl File for FatFile {
                     self.filesystem.borrow().write_cluster(
                         cluster,
                         &buffer[writing_offset..(writing_offset + cluster_size)],
-                    );
+                    )?;
 
                     to_write -= cluster_size;
                     writing_offset += cluster_size;
                 }
             } else {
                 let mut temp_buffer: Vec<u8> = vec![0; cluster_size];
-                let mut temp_slice = temp_buffer.as_mut_slice();
+                let temp_slice = temp_buffer.as_mut_slice();
 
                 // Copy whole cluster to the temporary buffer
                 self.filesystem
                     .borrow()
-                    .read_cluster_to(cluster, temp_slice);
+                    .read_cluster_to(cluster, temp_slice)?;
 
                 // Overwrite read cluster with user supplied data starting at the writing_offset
                 temp_slice[offset_within_cluster..(offset_within_cluster + copy_size)]
                     .copy_from_slice(&buffer[writing_offset..(writing_offset + copy_size)]);
 
                 // Write cluster to the disk
-                self.filesystem.borrow().write_cluster(cluster, temp_slice);
+                self.filesystem.borrow().write_cluster(cluster, temp_slice)?;
 
                 to_write -= copy_size;
                 writing_offset += copy_size;
@@ -221,7 +220,7 @@ impl File for FatFile {
         // Perform write
         for new_cluster in allocated_clusters {
             let mut temp_buffer: Vec<u8> = vec![0; cluster_size];
-            let mut temp_slice = temp_buffer.as_mut_slice();
+            let temp_slice = temp_buffer.as_mut_slice();
             let copy_size = min(to_write, cluster_size) - 1;
 
             // Overwrite read cluster with user supplied data starting at the writing_offset
@@ -231,7 +230,7 @@ impl File for FatFile {
             // Write cluster to the disk
             self.filesystem
                 .borrow()
-                .write_cluster(new_cluster.0 as u32, temp_slice);
+                .write_cluster(new_cluster.0 as u32, temp_slice)?;
 
             to_write -= copy_size;
             writing_offset += copy_size;
@@ -243,7 +242,7 @@ impl File for FatFile {
     fn delete(&mut self) -> Result<(), FileSystemError> {
         let mut fat = self.filesystem.borrow_mut();
 
-        fat.remove_file_entry(&self.file_entry, self.file_entry_cluster);
+        fat.remove_file_entry(&self.file_entry, self.file_entry_cluster)?;
         fat.mark_clusters_as_free(self.starting_cluster);
 
         Ok(())
@@ -274,7 +273,65 @@ impl File for FatFile {
     }
 
     fn shrink(&mut self, new_size: usize) -> Result<(), FileSystemError> {
-        todo!()
+        if self.file_size as usize <= new_size {
+            return Err(FileSystemError::InvalidArgument);
+        }
+
+        let mut fat = self.filesystem.borrow_mut();
+        let old_file_entry = self.file_entry.clone();
+        let cluster_size = fat.bpb.bytes_per_sector * fat.bpb.sectors_per_cluster as u16;
+
+        let current_last_cluster = self.file_size / cluster_size as u32;
+        let new_last_cluster = new_size / cluster_size as usize;
+        self.file_size = new_size as u32;
+        self.file_entry.set_file_size(new_size as u32);
+
+        // if new file size still fits in the same cluster, then just update file_size in file_entry and finish
+        if current_last_cluster as usize == new_last_cluster {
+            fat.serialize_file_entry(
+                Some(&old_file_entry),
+                &self.file_entry,
+                self.file_entry_cluster,
+            );
+
+            return Ok(());
+        }
+
+        // if new file size is somewhere in previous clusters, then find last cluster, remove
+        // subsequent clusters from FAT table and update file_size in file_entry
+
+        // Get list of clusters associated with file
+        let mut file_clusters = fat.get_clusters_for_file(self.starting_cluster);
+
+        // Get index of last valid cluster within new file size
+        let new_last_cluster_index = file_clusters
+            .clone()
+            .enumerate()
+            .find(|&x| x.0 == new_last_cluster)
+            .unwrap()
+            .0;
+
+        // Skip `new_last_cluster_index` used entries in iterator
+        file_clusters
+            .advance_by(new_last_cluster_index + 1)
+            .unwrap();
+
+        // Mark remaining clusters as free
+        file_clusters.for_each(|cluster| {
+            fat.file_allocation_table[cluster as usize] = 0x00;
+        });
+
+        // Mark last cluster as end of file
+        fat.file_allocation_table[new_last_cluster_index] = 0xFFFF_FFFF;
+
+        // Write changes to the disk
+        fat.serialize_file_entry(
+            Some(&old_file_entry),
+            &self.file_entry,
+            self.file_entry_cluster,
+        );
+
+        Ok(())
     }
 
     fn set_creation_datetime(

@@ -1,7 +1,6 @@
 //! Filesystem crate for Moose operating system
 //!
 //! Contains definitions of FileSystem, File and Directory traits and mutual errors and attributes
-#![allow(unused)]
 #![feature(iter_advance_by)]
 #![feature(iter_array_chunks)]
 #![feature(iter_collect_into)]

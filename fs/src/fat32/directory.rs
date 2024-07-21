@@ -1,9 +1,9 @@
-use chrono::{NaiveDateTime, Utc};
+use chrono::NaiveDateTime;
 use std::{cell::RefCell, rc::Rc};
 
-use crate::{Attributes, Directory, File, FileSystemEntry, FileSystemError};
+use crate::{Attributes, Directory, FileSystemEntry, FileSystemError};
 
-use super::{fat::Fat, file::FatFile, FatEntry, FatFileAttributes, FatFileEntry, RawFatFileEntry};
+use super::{fat::Fat, file::FatFile, FatFileAttributes, FatFileEntry, RawFatFileEntry};
 
 /// Implementation of filesystems' Directory
 pub struct FatDirectory {
@@ -27,7 +27,6 @@ impl FatDirectory {
         }
 
         let current_time = fat.current_datetime();
-        let cluster = fat.allocate_and_link_clusters(1)?.next().unwrap().0;
 
         let raw_file_entry = RawFatFileEntry::default();
         let mut fat_entry = FatFileEntry::default();
@@ -126,7 +125,7 @@ impl Directory for FatDirectory {
     fn delete(&mut self) -> Result<(), FileSystemError> {
         let mut fat = self.filesystem.borrow_mut();
 
-        fat.remove_file_entry(&self.file_entry, self.file_entry_cluster);
+        fat.remove_file_entry(&self.file_entry, self.file_entry_cluster)?;
         fat.mark_clusters_as_free(self.content_cluster);
 
         Ok(())

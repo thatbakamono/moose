@@ -1,5 +1,4 @@
-use std::cmp::min;
-use ucs2::Error;
+//! Utilities to convert from or to long file names
 
 /// Utility struct and method for converting a long file name (LFN) to a short file name (SFN) in the FAT (File Allocation Table) filesystem.
 pub struct LongFileName {}
@@ -18,7 +17,7 @@ impl LongFileName {
         let mut lossy = false;
 
         // Convert name to uppercase
-        let mut lfn = lfn.to_ascii_uppercase();
+        let lfn = lfn.to_ascii_uppercase();
 
         // Split the string into filename and extension
         let dot = lfn.rfind(".");
@@ -94,7 +93,7 @@ impl LongFileName {
         let mut sfn = Self::convert_to_sfn(lfn);
 
         if sfn.len() != 11 {
-            for i in sfn.len()..=11 {
+            for _ in sfn.len()..=11 {
                 sfn.push(' ');
             }
         }
