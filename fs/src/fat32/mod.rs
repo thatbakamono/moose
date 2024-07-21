@@ -103,13 +103,16 @@ pub(crate) struct BiosParameterBlock {
     sectors_per_cluster: u8,
     reserved_sector_count: u16,
     number_of_fats: u8,
-    #[deku(assert = "*root_entries_count == 0")] // see Table `Boot Sector and BPB Structure` at `documents/FAT32 Specification.pdf`, p. 9
+    // see Table `Boot Sector and BPB Structure` at `documents/FAT32 Specification.pdf`, p. 9
+    #[deku(assert = "*root_entries_count == 0")]
     root_entries_count: u16,
-    #[deku(assert = "*total_count_of_sectors == 0")] // see Table `Boot Sector and BPB Structure` at `documents/FAT32 Specification.pdf`, p. 9
+    // see Table `Boot Sector and BPB Structure` at `documents/FAT32 Specification.pdf`, p. 9
+    #[deku(assert = "*total_count_of_sectors == 0")]
     total_count_of_sectors: u16,
     #[deku(assert = "[0xF0, 0xF8, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF].contains(media_type)")]
     media_type: u8,
-    #[deku(assert = "*sectors_per_fat == 0")] // see Table `Boot Sector and BPB Structure` at `documents/FAT32 Specification.pdf`, p. 9
+    // see Table `Boot Sector and BPB Structure` at `documents/FAT32 Specification.pdf`, p. 9
+    #[deku(assert = "*sectors_per_fat == 0")]
     sectors_per_fat: u16,
     sectors_per_track: u16,
     number_of_heads: u16,
@@ -123,7 +126,8 @@ pub(crate) struct BiosParameterBlock {
     boot_sector_copy_sector_number: u16,
     #[deku(pad_bytes_before = "12")]
     drive_number: u8,
-    #[deku(assert = "*boot_signature == 0x29", pad_bytes_before = "1")] // see Table `Boot Sector and BPB Structure` at `documents/FAT32 Specification.pdf`, p. 9
+    // see Table `Boot Sector and BPB Structure` at `documents/FAT32 Specification.pdf`, p. 9
+    #[deku(assert = "*boot_signature == 0x29", pad_bytes_before = "1")]
     boot_signature: u8,
     volume_id: u32,
     #[deku(
@@ -134,7 +138,8 @@ pub(crate) struct BiosParameterBlock {
         map = "|value: [u8; 8]| -> Result<_, DekuError> { Ok(String::from_utf8_lossy(&value[..]).into_owned()) }"
     )]
     filesystem_type: String,
-    #[deku(assert = "*signature == [0x55, 0xAA]", pad_bytes_before = "420")] // see Table `Boot Sector and BPB Structure` at `documents/FAT32 Specification.pdf`, p. 9
+    // see Table `Boot Sector and BPB Structure` at `documents/FAT32 Specification.pdf`, p. 9
+    #[deku(assert = "*signature == [0x55, 0xAA]", pad_bytes_before = "420")]
     signature: [u8; 2],
 }
 
@@ -329,8 +334,8 @@ impl FatFileEntry {
 
         self.raw[0].name = bytes[0..11].to_vec().try_into().unwrap();
 
-        let mut lfn_checksum = 0;
-        for i in 11..0 {
+        let mut lfn_checksum: u8 = 0;
+        for i in (0..=10).rev() {
             let checksum_copy = lfn_checksum;
 
             if (checksum_copy & 1) == 1 {
@@ -339,7 +344,7 @@ impl FatFileEntry {
                 lfn_checksum = 0;
             }
 
-            lfn_checksum += (checksum_copy >> 1) + self.raw[0].name[11 - i];
+            lfn_checksum.wrapping_add((checksum_copy >> 1) + self.raw[0].name[10 - i]);
         }
 
         let lfn_name_length = ucs2::str_num_ucs2_chars(&self.name).unwrap();
@@ -663,7 +668,8 @@ mod tests {
     };
 
     use super::{
-        FatDataSource, FatDateFormat, FatTimeFormat, FatTimeSource, Sector, FAT_SECTOR_SIZE, IMAGE1_DATA
+        FatDataSource, FatDateFormat, FatTimeFormat, FatTimeSource, Sector, FAT_SECTOR_SIZE,
+        IMAGE1_DATA,
     };
 
     struct FileFatDataSource {
@@ -1069,6 +1075,36 @@ mod tests {
         file.read(0, &mut buffer2[..]);
 
         assert_eq!(String::from_utf8_lossy(&buffer2), "STRTest");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_file_shrink_in_the_same_cluster() -> Result<(), FileSystemError> {
+        let fat = setup_fat();
+        let mut file = fat.open_file("fruits/random things/random2/AxelF.txt")?;
+        file.shrink(file.file_size() - 11); // 1811 - 11 = 1800
+
+        let mut buffer = [0u8; 8];
+        file.read(1800 - 8, &mut buffer[..]);
+
+        assert_eq!(String::from_utf8_lossy(&buffer), "Shoot Ou");
+        assert!(file.read(1805, &mut buffer[..]).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_file_shrink_in_another_cluster() -> Result<(), FileSystemError> {
+        let fat = setup_fat();
+        let mut file = fat.open_file("fruits/random things/random2/Till Lindemann.txt")?;
+        file.shrink(0x168A);
+
+        let mut buffer = [0u8; 14];
+        file.read(0x168A - 14, &mut buffer[..]);
+
+        assert_eq!(String::from_utf8_lossy(&buffer), "Ich tu dir weh");
+        assert!(file.read(0x168A + 2, &mut buffer[..]).is_err());
 
         Ok(())
     }

@@ -21,7 +21,8 @@ use crate::{Directory, FileSystem, FileSystemEntry, FileSystemError};
 use super::directory::FatDirectory;
 use super::file::FatFile;
 use super::{
-    BiosParameterBlock, FatDataSource, FatDateFormat, FatEntry, FatTimeFormat, FatTimeSource, FileListing, RawFatFileEntry, Sector
+    BiosParameterBlock, FatDataSource, FatDateFormat, FatEntry, FatTimeFormat, FatTimeSource,
+    FileListing, RawFatFileEntry, Sector,
 };
 
 const FAT_FREE_ENTRY: u8 = 0xE5;
