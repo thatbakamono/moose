@@ -4,6 +4,8 @@ use core::cell::OnceCell;
 use x86_64::registers::segmentation::{Segment64, GS};
 use x86_64::VirtAddr;
 
+pub(crate) const MAXIMUM_CPU_CORES: usize = 4;
+
 pub struct ProcessorControlBlock {
     pub apic_processor_id: u16,
     pub local_apic: OnceCell<LocalApic>,

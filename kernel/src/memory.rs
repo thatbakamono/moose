@@ -135,6 +135,10 @@ impl MemoryManager {
         self.unmap_inner(current_page_table(self.physical_memory_offset), page)
     }
 
+    pub unsafe fn unmap(&self, page_table: *mut PageTable, page: &Page) -> Result<(), MemoryError> {
+        self.unmap_inner(page_table, page)
+    }
+
     pub fn translate_virtual_address_to_physical_for_current_address_space(
         &self,
         address: VirtualAddress,

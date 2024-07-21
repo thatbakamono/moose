@@ -1,12 +1,18 @@
+use crate::arch::x86::gdt::{GDT_DESCRIPTOR, TSSS};
 use crate::arch::x86::idt::IDT;
 use crate::arch::x86::use_kernel_page_table;
 use crate::cpu::ProcessorControlBlock;
 use crate::driver::pit::PIT;
 use crate::kernel::Kernel;
 use crate::memory::{memory_manager, MemoryError, Page, PageFlags, VirtualAddress};
+use crate::{start_program, InterruptStack};
 use alloc::sync::Arc;
+use core::alloc::Layout;
 use core::arch::asm;
-use core::ptr;
+use core::{
+    mem,
+    ptr::{self, addr_of},
+};
 use log::info;
 use spin::RwLock;
 use x86_64::registers::control::{Cr4, Cr4Flags};
@@ -46,25 +52,58 @@ pub static TRAMPOLINE_CODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tr
 pub static mut AP_STARTUP_SPINLOCK: RwLock<u8> = RwLock::new(0);
 
 pub unsafe extern "C" fn ap_start(apic_processor_id: u64, kernel_ptr: *const RwLock<Kernel>) -> ! {
+    let stack_pointer: u64;
+
+    asm!("mov {stack_pointer}, rsp", stack_pointer = out(reg) stack_pointer);
+
     // @TODO: Move to perform_arch_initialization()
     let kernel = Arc::from_raw(kernel_ptr);
 
     IDT.load();
     Cr4::write(Cr4::read() | Cr4Flags::FSGSBASE);
 
+    asm!("cli", options(nomem, nostack));
+
+    asm!(
+        "lgdt [{gdt}]",
+        options(nomem, nostack, preserves_flags),
+        gdt = in(reg) addr_of!(GDT_DESCRIPTOR) as u64,
+    );
+
+    let physical_memory_offset = kernel.read().physical_memory_offset;
+
     ProcessorControlBlock::create_pcb_for_current_processor(apic_processor_id as u16);
     let pcb = ProcessorControlBlock::get_pcb_for_current_processor();
-    let local_apic = LocalApic::initialize_for_current_processor(Arc::clone(&kernel));
+    let local_apic = LocalApic::initialize_for_current_processor(kernel);
     local_apic.enable_timer();
 
     _ = (*pcb).local_apic.set(local_apic);
 
-    *AP_STARTUP_SPINLOCK.write() = 1;
-    info!("Processor {:p} has started", pcb);
+    let processor_index = unsafe { (*pcb).apic_processor_id }; // NOTE: APIC Processor ID's behavior isn't guaranteed but seems to always work this way in practice
 
-    loop {
-        asm!("hlt");
-    }
+    let interrupt_stack =
+        alloc::alloc::alloc_zeroed(Layout::new::<InterruptStack>()) as *mut InterruptStack;
+
+    TSSS[processor_index as usize].rsp0 =
+        interrupt_stack as u64 + mem::size_of::<InterruptStack>() as u64 - 16;
+    TSSS[processor_index as usize].rsp1 =
+        interrupt_stack as u64 + mem::size_of::<InterruptStack>() as u64 - 16;
+    TSSS[processor_index as usize].rsp2 =
+        interrupt_stack as u64 + mem::size_of::<InterruptStack>() as u64 - 16;
+
+    asm!(
+        "ltr {segment_selector:x}",
+        options(nomem, nostack, preserves_flags),
+        segment_selector = in(reg) (((9 + (processor_index * 2)) << 3) | 3)
+    );
+
+    asm!("sti", options(nomem, nostack));
+
+    info!("Processor {} has started", processor_index);
+
+    *AP_STARTUP_SPINLOCK.write() = 1;
+
+    start_program(physical_memory_offset, stack_pointer, interrupt_stack);
 }
 
 pub struct LocalApic {

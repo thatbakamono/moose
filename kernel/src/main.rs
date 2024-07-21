@@ -32,7 +32,7 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use arch::x86::gdt::{
     GlobalDescriptorTableDescriptor, SegmentFlags, SystemSegmentDescriptor,
-    SystemSegmentDescriptorAttributes, SystemSegmentType, GDT, GDT_DESCRIPTOR, TSS,
+    SystemSegmentDescriptorAttributes, SystemSegmentType, GDT, GDT_DESCRIPTOR, TSSS,
 };
 use core::alloc::Layout;
 use core::arch::asm;
@@ -98,6 +98,10 @@ static mut KERNEL_PAGE_TABLE: *const () = ptr::null();
 
 #[no_mangle]
 unsafe extern "C" fn _start() -> ! {
+    let stack_pointer: u64;
+
+    asm!("mov {stack_pointer}, rsp", stack_pointer = out(reg) stack_pointer, options(nomem, nostack, preserves_flags));
+
     assert!(BASE_REVISION.is_supported());
     assert!(STACK_SIZE_REQUEST.get_response().is_some());
 
@@ -109,14 +113,16 @@ unsafe extern "C" fn _start() -> ! {
     asm!("cli", options(nostack, nomem));
 
     {
-        GDT.tss_segment = SystemSegmentDescriptor::new(
-            addr_of!(TSS) as u64,
-            mem::size_of::<TaskStateSegment>() as u32,
-            SystemSegmentDescriptorAttributes::new()
-                .with_present(true)
-                .with_segment_type(SystemSegmentType::SixtyFourBitAvailableTaskStateSegment),
-            SegmentFlags::empty(),
-        );
+        for (index, tss_segment) in GDT.tss_segments.iter_mut().enumerate() {
+            *tss_segment = SystemSegmentDescriptor::new(
+                addr_of!(TSSS) as u64 + (index * mem::size_of::<TaskStateSegment>()) as u64,
+                mem::size_of::<TaskStateSegment>() as u32,
+                SystemSegmentDescriptorAttributes::new()
+                    .with_present(true)
+                    .with_segment_type(SystemSegmentType::SixtyFourBitAvailableTaskStateSegment),
+                SegmentFlags::empty(),
+            );
+        }
 
         GDT_DESCRIPTOR = GlobalDescriptorTableDescriptor::new(
             mem::size_of_val(&GDT) as u16 - 1,
@@ -163,11 +169,12 @@ unsafe extern "C" fn _start() -> ! {
 
     info!("Hello, moose!");
 
-    let interrupt_stack = alloc::alloc::alloc_zeroed(Layout::new::<Stack>()) as *mut Stack;
+    let interrupt_stack =
+        alloc::alloc::alloc_zeroed(Layout::new::<InterruptStack>()) as *mut InterruptStack;
 
-    TSS.rsp0 = interrupt_stack as u64 + mem::size_of::<Stack>() as u64 - 16;
-    TSS.rsp1 = interrupt_stack as u64 + mem::size_of::<Stack>() as u64 - 16;
-    TSS.rsp2 = interrupt_stack as u64 + mem::size_of::<Stack>() as u64 - 16;
+    TSSS[0].rsp0 = interrupt_stack as u64 + mem::size_of::<InterruptStack>() as u64 - 16;
+    TSSS[0].rsp1 = interrupt_stack as u64 + mem::size_of::<InterruptStack>() as u64 - 16;
+    TSSS[0].rsp2 = interrupt_stack as u64 + mem::size_of::<InterruptStack>() as u64 - 16;
 
     {
         asm!(
@@ -205,6 +212,7 @@ unsafe extern "C" fn _start() -> ! {
     let apic = Arc::new(RwLock::new(Apic::initialize(Arc::clone(&acpi), timer_irq)));
 
     let kernel = Arc::new(RwLock::new(Kernel {
+        physical_memory_offset,
         acpi,
         apic,
         gdt: x86_64::instructions::tables::sgdt(),
@@ -239,14 +247,22 @@ unsafe extern "C" fn _start() -> ! {
 
     info!("Entering user mode!");
 
-    {
-        let mut memory_manager = memory_manager().write();
+    start_program(physical_memory_offset, stack_pointer, interrupt_stack);
+}
 
-        let program_frame = memory_manager.allocate_frame().unwrap();
+pub fn start_program(
+    physical_memory_offset: u64,
+    kernel_stack: u64,
+    interrupt_stack: *mut InterruptStack,
+) -> ! {
+    let mut memory_manager = memory_manager().write();
 
-        let stack = alloc::alloc::alloc_zeroed(Layout::new::<Stack>());
+    let program_frame = memory_manager.allocate_frame().unwrap();
 
-        // temporarily map frame in kernel's address space, so we can write there
+    let stack = unsafe { alloc::alloc::alloc_zeroed(Layout::new::<Stack>()) };
+
+    // temporarily map frame in kernel's address space, so we can write there
+    unsafe {
         memory_manager
             .map_any_temporary_for_current_address_space(
                 &program_frame,
@@ -265,64 +281,73 @@ unsafe extern "C" fn _start() -> ! {
                     *(page.address().as_mut_ptr::<u8>().offset(5)) = 0xFE;
                 },
             )
+            .unwrap()
+    };
+
+    let program_page_table = Box::leak(Box::new(PageTable::new()));
+
+    // map kernel in program's address space
+    {
+        let kernel_virtual_base_address = KERNEL_ADDRESS_REQUEST
+            .get_response()
+            .unwrap()
+            .virtual_base();
+
+        let kernel_level_4_page_table_entry_index =
+            ((kernel_virtual_base_address >> 39) & 0b1_1111_1111) as usize;
+
+        let kernel_page_table = unsafe { current_page_table(physical_memory_offset) };
+
+        let level_4_page_table_entry =
+            &unsafe { &*kernel_page_table }[kernel_level_4_page_table_entry_index];
+
+        program_page_table[kernel_level_4_page_table_entry_index]
+            .set_address(level_4_page_table_entry.address());
+        program_page_table[kernel_level_4_page_table_entry_index]
+            .set_flags(level_4_page_table_entry.flags());
+    }
+
+    // map kernel's stack in program's address space
+    {
+        let kernel_page_table = unsafe { current_page_table(physical_memory_offset) };
+
+        let page_index = ((kernel_stack >> 39) & 0b1_1111_1111) as usize;
+
+        let level_4_page_table_entry = &unsafe { &*kernel_page_table }[page_index];
+
+        program_page_table[page_index].set_address(level_4_page_table_entry.address());
+        program_page_table[page_index].set_flags(level_4_page_table_entry.flags());
+    }
+
+    // remap interrupt's stack in program's address space
+    for page_index in 0..4 {
+        let interrupt_stack_virtual_address =
+            VirtualAddress::new(interrupt_stack as u64 + (page_index * 4096));
+        let interrupt_stack_physical_address = memory_manager
+            .translate_virtual_address_to_physical_for_current_address_space(
+                interrupt_stack_virtual_address,
+            )
             .unwrap();
 
-        let program_page_table = Box::leak(Box::new(PageTable::new()));
+        unsafe {
+            _ = memory_manager.unmap(
+                program_page_table,
+                &Page::new(interrupt_stack_virtual_address),
+            );
 
-        // map kernel in program's address space
-        {
-            let kernel_virtual_base_address = KERNEL_ADDRESS_REQUEST
-                .get_response()
-                .unwrap()
-                .virtual_base();
-
-            let kernel_level_4_page_table_entry_index =
-                ((kernel_virtual_base_address >> 39) & 0b1_1111_1111) as usize;
-
-            let kernel_page_table = current_page_table(physical_memory_offset);
-
-            let level_4_page_table_entry =
-                &unsafe { &*kernel_page_table }[kernel_level_4_page_table_entry_index];
-
-            program_page_table[kernel_level_4_page_table_entry_index]
-                .set_address(level_4_page_table_entry.address());
-            program_page_table[kernel_level_4_page_table_entry_index]
-                .set_flags(level_4_page_table_entry.flags());
+            memory_manager
+                .map(
+                    program_page_table,
+                    &Page::new(interrupt_stack_virtual_address),
+                    &Frame::new(interrupt_stack_physical_address),
+                    PageFlags::WRITABLE,
+                )
+                .unwrap();
         }
+    }
 
-        // map kernel's stack in program's address space | FIXME (XD!)
-        {
-            let kernel_page_table = current_page_table(physical_memory_offset);
-
-            let level_4_page_table_entry = &unsafe { &*kernel_page_table }[256];
-
-            program_page_table[256].set_address(level_4_page_table_entry.address());
-            program_page_table[256].set_flags(level_4_page_table_entry.flags());
-        }
-
-        // map interrupt's stack in program's address space
-        {
-            for page_index in 0..4 {
-                let interrupt_stack_virtual_address =
-                    VirtualAddress::new(interrupt_stack as u64 + (page_index * 4096));
-                let interrupt_stack_physical_address = memory_manager
-                    .translate_virtual_address_to_physical_for_current_address_space(
-                        interrupt_stack_virtual_address,
-                    )
-                    .unwrap();
-
-                memory_manager
-                    .map(
-                        program_page_table,
-                        &Page::new(interrupt_stack_virtual_address),
-                        &Frame::new(interrupt_stack_physical_address),
-                        PageFlags::WRITABLE,
-                    )
-                    .unwrap();
-            }
-        }
-
-        // map program in program's address space
+    // map program in program's address space
+    unsafe {
         memory_manager
             .map(
                 program_page_table,
@@ -330,54 +355,62 @@ unsafe extern "C" fn _start() -> ! {
                 &program_frame,
                 PageFlags::USER_MODE_ACCESSIBLE | PageFlags::EXECUTABLE,
             )
+            .unwrap()
+    };
+
+    // map program's stack in program's address space
+    for page_index in 0..4 {
+        let stack_virtual_address = VirtualAddress::new(stack as u64 + (page_index * 4096));
+        let stack_physical_address = memory_manager
+            .translate_virtual_address_to_physical_for_current_address_space(stack_virtual_address)
             .unwrap();
 
-        // map program's stack in program's address space
-        {
-            for page_index in 0..4 {
-                let stack_virtual_address = VirtualAddress::new(stack as u64 + (page_index * 4096));
-                let stack_physical_address = memory_manager
-                    .translate_virtual_address_to_physical_for_current_address_space(
-                        stack_virtual_address,
-                    )
-                    .unwrap();
+        unsafe {
+            _ = memory_manager.unmap(program_page_table, &Page::new(stack_virtual_address));
 
-                memory_manager
-                    .map(
-                        program_page_table,
-                        &Page::new(stack_virtual_address),
-                        &Frame::new(stack_physical_address),
-                        PageFlags::USER_MODE_ACCESSIBLE | PageFlags::WRITABLE,
-                    )
-                    .unwrap();
-            }
-        }
-
-        // switch page table
-        {
-            let program_page_table_physical_address = memory_manager
-                .translate_virtual_address_to_physical_for_current_address_space(
-                    VirtualAddress::new(program_page_table as *const _ as u64),
+            memory_manager
+                .map(
+                    program_page_table,
+                    &Page::new(stack_virtual_address),
+                    &Frame::new(stack_physical_address),
+                    PageFlags::USER_MODE_ACCESSIBLE | PageFlags::WRITABLE,
                 )
-                .unwrap()
-                .as_u64();
-
-            let program_page_table_frame = PhysFrame::<Size4KiB>::from_start_address(
-                PhysAddr::new(program_page_table_physical_address),
-            )
-            .unwrap();
-
-            Cr3::write(program_page_table_frame, Cr3Flags::empty());
-
-            tlb::flush_all();
+                .unwrap();
         }
-
-        enter_user_mode(
-            0xDEA_DBEE_F000 as *const _,
-            stack.add(mem::size_of::<Stack>()).offset(-16),
-        );
     }
+
+    // switch page table
+    {
+        let program_page_table_physical_address = memory_manager
+            .translate_virtual_address_to_physical_for_current_address_space(VirtualAddress::new(
+                program_page_table as *const _ as u64,
+            ))
+            .unwrap()
+            .as_u64();
+
+        let program_page_table_frame = PhysFrame::<Size4KiB>::from_start_address(PhysAddr::new(
+            program_page_table_physical_address,
+        ))
+        .unwrap();
+
+        unsafe { Cr3::write(program_page_table_frame, Cr3Flags::empty()) };
+
+        tlb::flush_all();
+    }
+
+    // We need to drop memory_manager manually because:
+    // > A noreturn asm block behaves just like a function which doesn't return; notably,
+    // > local variables in scope are not dropped before it is invoked.
+    drop(memory_manager);
+
+    enter_user_mode(0xDEA_DBEE_F000 as *const _, unsafe {
+        stack.add(mem::size_of::<Stack>()).offset(-16)
+    });
 }
+
+#[repr(C)]
+#[repr(align(4096))]
+pub struct InterruptStack([u8; 16 * 1024]);
 
 #[repr(C)]
 #[repr(align(4096))]
@@ -393,21 +426,19 @@ extern "C" fn enter_user_mode(program: *const u8, stack: *const u8) -> ! {
     unsafe {
         asm!(
             "
-                mov dx, (8 << 3) | 3
-                mov ds, dx
-                mov es, dx
-
+                mov ds, {data_segment:r}
+                mov es, {data_segment:r}
                 push (8 << 3) | 3
                 push {stack}
                 pushf
                 push (7 << 3) | 3
                 push {program}
-
                 iretq
             ",
+            data_segment = in(reg) (8 << 3) | 3,
             program = in(reg) program,
             stack = in(reg) stack,
-            options(noreturn)
+            options(nomem, noreturn)
         );
     };
 }

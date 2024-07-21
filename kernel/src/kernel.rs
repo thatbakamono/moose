@@ -6,6 +6,7 @@ use spin::{Mutex, RwLock};
 use x86_64::structures::DescriptorTablePointer;
 
 pub struct Kernel {
+    pub physical_memory_offset: u64,
     pub acpi: Arc<Acpi>,
     pub apic: Arc<RwLock<Apic>>,
     pub gdt: DescriptorTablePointer,

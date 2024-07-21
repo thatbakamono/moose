@@ -6,6 +6,7 @@ pub use io_apic::*;
 pub use local_apic::*;
 
 use crate::arch::x86::idt::register_interrupt_handler;
+use crate::cpu::MAXIMUM_CPU_CORES;
 use crate::driver::acpi::{Acpi, MadtEntryInner};
 use crate::driver::pit::PIT;
 use crate::kernel::Kernel;
@@ -134,6 +135,7 @@ impl Apic {
                 }
             })
             .filter(|entry| entry.apic_id != bsp_id as u8)
+            .take(MAXIMUM_CPU_CORES - 1)
             .for_each(|entry| {
                 if entry.flags & (1 << 0) == 0 {
                     // Processor is not online-capable, so ignore this entry
@@ -147,7 +149,10 @@ impl Apic {
                 unsafe {
                     // Create 4MiB stack
                     let stack = {
-                        let layout = Layout::array::<u8>(STACK_SIZE).unwrap();
+                        let layout = Layout::array::<u8>(STACK_SIZE)
+                            .unwrap()
+                            .align_to(4096)
+                            .unwrap();
 
                         alloc_zeroed(layout)
                     };

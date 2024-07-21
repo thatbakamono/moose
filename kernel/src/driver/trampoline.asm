@@ -57,12 +57,12 @@ startup_ap:
     mov cr0, ebx
 
     ; far jump to enable Long Mode and load CS with the first entry of GDT
-    jmp 0b01000:long_mode_ap
+    jmp 0b101000:long_mode_ap
 
 USE64
 long_mode_ap:
     ; Reload segment registers to the second entry of GDT
-    mov ax, 0b10000
+    mov ax, 0b110000
     mov ds, ax
     mov es, ax
     mov fs, ax
@@ -146,6 +146,18 @@ gdtr:
 
 gdt:
 .null equ $ - gdt
+    dq 0
+
+.unused1 equ $ - gdt
+    dq 0
+
+.unused2 equ $ - gdt
+    dq 0
+
+.unused3 equ $ - gdt
+    dq 0
+
+.unused4 equ $ - gdt
     dq 0
 
 .kernel_code equ $ - gdt

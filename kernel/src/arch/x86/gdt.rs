@@ -3,22 +3,28 @@ use core::mem;
 use bitfield_struct::bitfield;
 use bitflags::bitflags;
 
+use crate::cpu::MAXIMUM_CPU_CORES;
+
 pub(crate) static mut GDT_DESCRIPTOR: GlobalDescriptorTableDescriptor =
     GlobalDescriptorTableDescriptor::new(0, 0); // We can't obtain the address of GDT at compile-time, so we have to initialize this in _start
 pub(crate) static mut GDT: GlobalDescriptorTable = GlobalDescriptorTable::new(); // We can't obtain the address of TSS at compile-time, so we have to initialize it in _start
-pub(crate) static mut TSS: TaskStateSegment = TaskStateSegment::new(
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    mem::size_of::<TaskStateSegment>() as u16,
-); // We have to allocate stacks first, thus we need to initialize rsps in _start
+pub(crate) static mut TSSS: [TaskStateSegment; MAXIMUM_CPU_CORES] = {
+    const DEFAULT: TaskStateSegment = TaskStateSegment::new(
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        mem::size_of::<TaskStateSegment>() as u16,
+    ); // We have to allocate stacks first, thus we need to initialize rsps in _start
+
+    [DEFAULT; MAXIMUM_CPU_CORES]
+};
 
 #[repr(C, packed)]
 pub(crate) struct GlobalDescriptorTableDescriptor {
@@ -43,7 +49,7 @@ pub(crate) struct GlobalDescriptorTable {
     pub(crate) kernel_mode_sixty_four_data_segment: SegmentDescriptor,
     pub(crate) user_mode_sixty_four_code_segment: SegmentDescriptor,
     pub(crate) user_mode_sixty_four_data_segment: SegmentDescriptor,
-    pub(crate) tss_segment: SystemSegmentDescriptor,
+    pub(crate) tss_segments: [SystemSegmentDescriptor; MAXIMUM_CPU_CORES],
 }
 
 impl GlobalDescriptorTable {
@@ -98,7 +104,11 @@ impl GlobalDescriptorTable {
                     .with_accessed(true),
                 SegmentFlags::empty(),
             ),
-            tss_segment: SystemSegmentDescriptor::zero(),
+            tss_segments: {
+                const DEFAULT: SystemSegmentDescriptor = SystemSegmentDescriptor::zero();
+
+                [DEFAULT; MAXIMUM_CPU_CORES]
+            },
         }
     }
 }
