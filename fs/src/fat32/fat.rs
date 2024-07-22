@@ -406,13 +406,13 @@ impl Fat {
         disk: Arc<Mutex<dyn FatDataSource>>,
         partition_first_sector_lba: u32,
     ) -> Result<BiosParameterBlock, FileSystemError> {
-        Ok(BiosParameterBlock::try_from(
+        BiosParameterBlock::try_from(
             disk.lock()
                 .unwrap()
                 .read_sectors(partition_first_sector_lba, 1)?[0]
                 .as_slice(),
         )
-        .map_err(|_| FileSystemError::BadData)?)
+        .map_err(|_| FileSystemError::BadData)
     }
 
     /// Retrieves a file entry and its corresponding cluster number by its path.

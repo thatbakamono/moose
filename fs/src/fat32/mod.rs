@@ -199,7 +199,7 @@ impl RawFileListing {
     fn read_files_raw(
         rest: &BitSlice<u8, Msb0>,
     ) -> Result<(&BitSlice<u8, Msb0>, Vec<RawFatFileEntry>), DekuError> {
-        let buffer_size = (rest.len() * 8) / size_of::<RawFatFileEntry>();
+        let buffer_size = (rest.len() / 8) / size_of::<RawFatFileEntry>();
         let mut buffer: Vec<RawFatFileEntry> = Vec::with_capacity(buffer_size);
         let mut remaining_slice = rest;
 
