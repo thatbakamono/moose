@@ -147,7 +147,8 @@ impl FileListing {
     fn read_files(
         rest: &BitSlice<u8, Msb0>,
     ) -> Result<(&BitSlice<u8, Msb0>, Vec<FatEntry>), DekuError> {
-        let mut buffer: Vec<FatEntry> = Vec::with_capacity((rest.len() / 8) / size_of::<RawFatFileEntry>());
+        let mut buffer: Vec<FatEntry> =
+            Vec::with_capacity((rest.len() / 8) / size_of::<RawFatFileEntry>());
         let mut remaining_slice = rest;
 
         loop {
@@ -322,7 +323,6 @@ impl FatFileEntry {
 
         self.raw[0].name = bytes[0..11].to_vec().try_into().unwrap();
 
-
         let lfn_checksum = self.compute_lfn_checksum(&self.raw[0].name);
         let lfn_name_length = ucs2::str_num_ucs2_chars(&self.name).unwrap();
         let lfn_name_buffer_length = (lfn_name_length / 13) * 13 + 13;
@@ -473,7 +473,6 @@ impl FatFileEntry {
         }
 
         lfn_checksum
-
     }
 }
 
@@ -501,9 +500,7 @@ impl From<RawFatFileEntry> for FatFileEntry {
         };
 
         FatFileEntry {
-            name: String::from_utf8_lossy(&value.name[..])
-                .trim()
-                .to_string(),
+            name: String::from_utf8_lossy(&value.name[..]).trim().to_string(),
             attr: FatFileAttributes::from_bits(value.attr).unwrap(),
             creation_date_time,
             last_access_date_time,
@@ -653,10 +650,7 @@ mod tests {
         Attributes, Directory, File as FileTrait, FileSystem, FileSystemEntry, FileSystemError,
     };
 
-    use super::{
-        FatDataSource, FatTimeSource, Sector, FAT_SECTOR_SIZE,
-        IMAGE1_DATA,
-    };
+    use super::{FatDataSource, FatTimeSource, Sector, FAT_SECTOR_SIZE, IMAGE1_DATA};
 
     struct FileFatDataSource {
         file: File,
@@ -670,21 +664,21 @@ mod tests {
         ) -> Result<(), FileSystemError> {
             let starting_offset = starting_sector * FAT_SECTOR_SIZE as u32;
 
-            self.file.seek(SeekFrom::Start(starting_offset as u64)).unwrap();
+            self.file
+                .seek(SeekFrom::Start(starting_offset as u64))
+                .unwrap();
             self.file.read_exact(buffer.as_flattened_mut()).unwrap();
 
             Ok(())
         }
 
-        fn write_sector(
-            &mut self,
-            sector: u32,
-            buffer: &[u8],
-        ) -> Result<(), FileSystemError> {
+        fn write_sector(&mut self, sector: u32, buffer: &[u8]) -> Result<(), FileSystemError> {
             let starting_offset = sector * FAT_SECTOR_SIZE as u32;
             assert_eq!(buffer.len(), 512);
 
-            self.file.seek(SeekFrom::Start(starting_offset as u64)).unwrap();
+            self.file
+                .seek(SeekFrom::Start(starting_offset as u64))
+                .unwrap();
             self.file.write(buffer).unwrap();
 
             Ok(())
@@ -710,11 +704,7 @@ mod tests {
             Ok(())
         }
 
-        fn write_sector(
-            &mut self,
-            sector: u32,
-            buffer: &[u8],
-        ) -> Result<(), FileSystemError> {
+        fn write_sector(&mut self, sector: u32, buffer: &[u8]) -> Result<(), FileSystemError> {
             assert_eq!(buffer.len(), 512);
 
             let starting_offset = (sector * FAT_SECTOR_SIZE as u32) as usize;

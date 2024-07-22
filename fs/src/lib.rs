@@ -238,4 +238,3 @@ pub enum FileSystemError {
     #[snafu(display("Bad data"))]
     BadData,
 }
-

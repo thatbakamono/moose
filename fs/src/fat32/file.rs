@@ -140,7 +140,9 @@ impl File for FatFile {
                         .copy_from_slice(&buffer[writing_offset..(writing_offset + copy_size)]);
 
                     // Write cluster to the disk
-                    self.filesystem.borrow().write_cluster(cluster, temp_slice)?;
+                    self.filesystem
+                        .borrow()
+                        .write_cluster(cluster, temp_slice)?;
 
                     to_write -= copy_size;
                     writing_offset += copy_size;
@@ -167,7 +169,9 @@ impl File for FatFile {
                     .copy_from_slice(&buffer[writing_offset..(writing_offset + copy_size)]);
 
                 // Write cluster to the disk
-                self.filesystem.borrow().write_cluster(cluster, temp_slice)?;
+                self.filesystem
+                    .borrow()
+                    .write_cluster(cluster, temp_slice)?;
 
                 to_write -= copy_size;
                 writing_offset += copy_size;
@@ -348,7 +352,8 @@ impl File for FatFile {
         &mut self,
         modification_date_time: NaiveDateTime,
     ) -> Result<(), FileSystemError> {
-        self.file_entry.set_last_write_date_time(modification_date_time);
+        self.file_entry
+            .set_last_write_date_time(modification_date_time);
 
         self.filesystem.borrow_mut().serialize_file_entry(
             Some(&self.file_entry),

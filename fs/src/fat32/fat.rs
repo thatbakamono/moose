@@ -7,16 +7,14 @@ use std::ffi::CStr;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+use crate::fat32::{FatFileAttributes, FatFileEntry, RawFileListing, FAT_SECTOR_SIZE};
 use crate::{FileSystem, FileSystemError};
-use crate::fat32::{
-    FatFileAttributes, FatFileEntry, RawFileListing, FAT_SECTOR_SIZE,
-};
 
 use super::directory::FatDirectory;
 use super::file::FatFile;
 use super::{
-    BiosParameterBlock, FatDataSource, FatEntry, FatTimeSource,
-    FileListing, RawFatFileEntry, Sector,
+    BiosParameterBlock, FatDataSource, FatEntry, FatTimeSource, FileListing, RawFatFileEntry,
+    Sector,
 };
 
 pub const FAT_FREE_SECTOR: u32 = 0x00;
@@ -37,7 +35,8 @@ impl Fat {
         time_source: Arc<dyn FatTimeSource>,
         partition_first_sector_lba: u32,
     ) -> Rc<RefCell<Self>> {
-        let bpb = Self::read_bpb(Arc::clone(&data_source), partition_first_sector_lba).expect("Failed to read Bios Parameter Block");
+        let bpb = Self::read_bpb(Arc::clone(&data_source), partition_first_sector_lba)
+            .expect("Failed to read Bios Parameter Block");
 
         let mut fat = Self {
             data_source,
@@ -407,10 +406,12 @@ impl Fat {
         partition_first_sector_lba: u32,
     ) -> Result<BiosParameterBlock, FileSystemError> {
         Ok(BiosParameterBlock::try_from(
-            disk.lock().unwrap()
+            disk.lock()
+                .unwrap()
                 .read_sectors(partition_first_sector_lba, 1)?[0]
                 .as_slice(),
-        ).map_err(|_| FileSystemError::BadData)?)
+        )
+        .map_err(|_| FileSystemError::BadData)?)
     }
 
     /// Retrieves a file entry and its corresponding cluster number by its path.
@@ -532,7 +533,8 @@ impl Fat {
                     .unwrap()
             });
 
-        self.write_file_entry(new_file_entry, cluster, first_entry_index).unwrap();
+        self.write_file_entry(new_file_entry, cluster, first_entry_index)
+            .unwrap();
 
         cluster
     }
@@ -623,7 +625,8 @@ impl Fat {
                 }
 
                 if lfn_handling {
-                    let attributes = FatFileAttributes::from_bits(entry.attr).expect("Failed to parse attributes");
+                    let attributes = FatFileAttributes::from_bits(entry.attr)
+                        .expect("Failed to parse attributes");
 
                     if attributes.is_long_name_entry() {
                         // Zero and mark current entry as free
@@ -663,7 +666,9 @@ impl Fat {
             (self.bpb.bytes_per_sector * self.bpb.sectors_per_cluster as u16 * 8) as usize,
         );
 
-        raw_file_listing.write(&mut buffer, ()).expect("Failed to write RawFileListing");
+        raw_file_listing
+            .write(&mut buffer, ())
+            .expect("Failed to write RawFileListing");
 
         self.write_cluster(cluster, buffer.as_raw_slice())?;
 
@@ -694,7 +699,9 @@ impl Fat {
         let mut currently_contiguous_chain_starting_index = None;
 
         for cluster in self.get_clusters_for_file(directory_cluster) {
-            let listing = self.get_raw_file_listing_from_cluster(cluster).expect("Failed to get file listing from cluster");
+            let listing = self
+                .get_raw_file_listing_from_cluster(cluster)
+                .expect("Failed to get file listing from cluster");
 
             for (idx, entry) in listing.iter().enumerate() {
                 let first_byte = entry.name[0];
@@ -714,7 +721,10 @@ impl Fat {
                     if currently_contiguous_entries_count == n {
                         // Safety: Safe, because starting index is Some() every time entries_count
                         // is bigger than 0
-                        return Some((cluster, currently_contiguous_chain_starting_index.unwrap() as usize));
+                        return Some((
+                            cluster,
+                            currently_contiguous_chain_starting_index.unwrap() as usize,
+                        ));
                     }
                 } else {
                     // It's not 0x00 nor FREE_ENTRY mark, so probably a valid entry
@@ -789,11 +799,7 @@ impl Fat {
 
         // There's no sufficient entries in directory so need to allocate some
         let current_last_cluster = clusters.last().unwrap();
-        let first_new_cluster = self
-            .allocate_and_link_clusters(1)?
-            .next()
-            .unwrap()
-            .0;
+        let first_new_cluster = self.allocate_and_link_clusters(1)?.next().unwrap().0;
 
         self.file_allocation_table[current_last_cluster as usize] = first_new_cluster as u32;
 

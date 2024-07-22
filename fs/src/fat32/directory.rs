@@ -174,7 +174,8 @@ impl Directory for FatDirectory {
         &mut self,
         modification_date_time: NaiveDateTime,
     ) -> Result<(), FileSystemError> {
-        self.file_entry.set_last_write_date_time(modification_date_time);
+        self.file_entry
+            .set_last_write_date_time(modification_date_time);
 
         self.filesystem.borrow_mut().serialize_file_entry(
             Some(&self.file_entry),
