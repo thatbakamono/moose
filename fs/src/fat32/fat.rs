@@ -2,19 +2,20 @@ use bitvec::prelude::*;
 use bytemuck::{cast, cast_slice, cast_slice_mut};
 use chrono::NaiveDateTime;
 use deku::DekuWrite;
-use std::cell::RefCell;
-use std::ffi::CStr;
-use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::{
+    cell::RefCell,
+    ffi::CStr,
+    rc::Rc,
+    sync::{Arc, Mutex},
+};
 
-use crate::fat32::{FatFileAttributes, FatFileEntry, RawFileListing, FAT_SECTOR_SIZE};
-use crate::{FileSystem, FileSystemError};
-
-use super::directory::FatDirectory;
-use super::file::FatFile;
 use super::{
-    BiosParameterBlock, FatDataSource, FatEntry, FatTimeSource, FileListing, RawFatFileEntry,
-    Sector,
+    directory::FatDirectory, file::FatFile, BiosParameterBlock, FatDataSource, FatEntry,
+    FatTimeSource, FileListing, RawFatFileEntry, Sector,
+};
+use crate::{
+    fat32::{FatFileAttributes, FatFileEntry, RawFileListing, FAT_SECTOR_SIZE},
+    FileSystem, FileSystemError,
 };
 
 pub const FAT_FREE_SECTOR: u32 = 0x00;

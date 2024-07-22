@@ -1,9 +1,8 @@
 use chrono::NaiveDateTime;
 use std::{cell::RefCell, rc::Rc};
 
-use crate::{Attributes, Directory, FileSystemEntry, FileSystemError};
-
 use super::{fat::Fat, file::FatFile, FatFileAttributes, FatFileEntry, RawFatFileEntry};
+use crate::{Attributes, Directory, FileSystemEntry, FileSystemError};
 
 /// Implementation of filesystems' Directory
 pub struct FatDirectory {
@@ -23,7 +22,7 @@ impl FatDirectory {
         let mut fat = self.filesystem.borrow_mut();
 
         if name.len() > 255 {
-            return Err(FileSystemError::TooLongName);
+            return Err(FileSystemError::NameTooLong);
         }
 
         let current_time = fat.current_datetime();

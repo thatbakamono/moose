@@ -1,30 +1,29 @@
-mod directory;
+extern crate alloc;
+
 pub mod fat;
-mod file;
 pub mod lfn;
+
+mod directory;
+mod file;
+
+use crate::{fat32::lfn::LongFileName, Attributes, FileSystemError};
 
 use bitfield_struct::bitfield;
 use bitflags::bitflags;
 use bitvec::prelude::*;
+use bytemuck::{cast, Pod, Zeroable};
 use chrono::{Datelike, NaiveDateTime, Timelike};
+use core::{
+    clone::Clone,
+    cmp::PartialEq,
+    convert::From,
+    default::Default,
+    iter::Iterator,
+    marker::Sized,
+    result::Result::{self, Ok},
+};
 use deku::{DekuContainerWrite, DekuError, DekuRead, DekuUpdate, DekuWrite};
 
-use core::clone::Clone;
-use core::cmp::PartialEq;
-use core::convert::From;
-use core::default::Default;
-use core::iter::Iterator;
-use core::marker::Sized;
-use core::result::Result;
-use core::result::Result::Ok;
-
-use bytemuck::{cast, Pod, Zeroable};
-#[cfg(feature = "no_std")]
-use spin::Mutex;
-
-extern crate alloc;
-use crate::fat32::lfn::LongFileName;
-use crate::{Attributes, FileSystemError};
 #[cfg(feature = "no_std")]
 use alloc::{
     rc::Rc,
@@ -33,6 +32,8 @@ use alloc::{
     vec::Vec,
     {format, vec},
 };
+#[cfg(feature = "no_std")]
+use spin::Mutex;
 
 /// Defines FAT sector size in bytes. It's independent of underlying storage medium sector size.
 pub const FAT_SECTOR_SIZE: usize = 512;
@@ -634,6 +635,7 @@ struct FatTimeFormat {
     hours: u8,
 }
 
+#[used]
 static IMAGE1_DATA: &[u8] = include_bytes!("../../assets/test1.img");
 
 #[cfg(test)]
@@ -652,6 +654,7 @@ mod tests {
 
     use super::{FatDataSource, FatTimeSource, Sector, FAT_SECTOR_SIZE, IMAGE1_DATA};
 
+    // Unused now, but useful for debugging purposes
     struct FileFatDataSource {
         file: File,
     }
@@ -679,7 +682,7 @@ mod tests {
             self.file
                 .seek(SeekFrom::Start(starting_offset as u64))
                 .unwrap();
-            self.file.write(buffer).unwrap();
+            self.file.write_all(buffer).unwrap();
 
             Ok(())
         }

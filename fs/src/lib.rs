@@ -226,8 +226,8 @@ pub enum FileSystemError {
     #[snafu(display("Entry already exists"))]
     AlreadyExists,
 
-    #[snafu(display("Too long name"))]
-    TooLongName,
+    #[snafu(display("Name too long"))]
+    NameTooLong,
 
     #[snafu(display("Invalid argument"))]
     InvalidArgument,

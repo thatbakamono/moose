@@ -1,14 +1,12 @@
 use chrono::NaiveDateTime;
 use libm::ceil;
-use std::cell::RefCell;
-use std::cmp::min;
-use std::rc::Rc;
-
-use crate::fat32::directory::FatDirectory;
-use crate::fat32::{FatFileAttributes, FatFileEntry};
-use crate::{Attributes, File, FileSystemError};
+use std::{cell::RefCell, cmp::min, rc::Rc};
 
 use super::fat::{Fat, FAT_FREE_SECTOR};
+use crate::{
+    fat32::{directory::FatDirectory, FatFileAttributes, FatFileEntry},
+    Attributes, File, FileSystemError,
+};
 
 pub struct FatFile {
     pub(crate) filesystem: Rc<RefCell<Fat>>,
