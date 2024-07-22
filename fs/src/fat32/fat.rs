@@ -19,13 +19,14 @@ use super::{
     FileListing, RawFatFileEntry, Sector,
 };
 
+pub const FAT_FREE_SECTOR: u32 = 0x00;
+pub const FAT_END_OF_FILE_MARK: u32 = 0xFFFFFFFF;
 const FAT_FREE_ENTRY: u8 = 0xE5;
 
 pub struct Fat {
     data_source: Arc<Mutex<dyn FatDataSource>>,
-    time_source: Arc<Mutex<dyn FatTimeSource>>,
+    time_source: Arc<dyn FatTimeSource>,
     partition_first_sector_lba: u32,
-    _sectors: u32,
     pub(crate) bpb: BiosParameterBlock,
     pub(crate) file_allocation_table: Vec<u32>,
 }
@@ -33,17 +34,15 @@ pub struct Fat {
 impl Fat {
     pub fn new(
         data_source: Arc<Mutex<dyn FatDataSource>>,
-        time_source: Arc<Mutex<dyn FatTimeSource>>,
+        time_source: Arc<dyn FatTimeSource>,
         partition_first_sector_lba: u32,
-        sectors: u32,
     ) -> Rc<RefCell<Self>> {
-        let bpb = Self::read_bpb(Arc::clone(&data_source), partition_first_sector_lba);
+        let bpb = Self::read_bpb(Arc::clone(&data_source), partition_first_sector_lba).expect("Failed to read Bios Parameter Block");
 
         let mut fat = Self {
             data_source,
             time_source,
             partition_first_sector_lba,
-            _sectors: sectors,
             bpb,
             file_allocation_table: Vec::new(),
         };
@@ -90,7 +89,7 @@ impl Fat {
     pub(crate) fn get_clusters_for_file(
         &self,
         mut cluster: u32,
-    ) -> impl Iterator<Item = u32> + Clone + DoubleEndedIterator {
+    ) -> impl DoubleEndedIterator<Item = u32> + Clone {
         // @TODO: Do some tests to find optimal value
         let mut clusters = Vec::with_capacity(32);
         clusters.push(cluster);
@@ -204,10 +203,10 @@ impl Fat {
     fn read_sectors(&self, first_sector_lba: u32, n: u32) -> Result<Vec<Sector>, FileSystemError> {
         if n * 512 >= (u16::MAX - 1) as u32 {
             let mut sectors = vec![[0u8; 512]; n as usize];
+            let mut data_source = self.data_source.lock().unwrap();
 
-            // @TODO: Fix
             for i in 0..(n - 2) {
-                self.data_source.lock().unwrap().read_sectors_to(
+                data_source.read_sectors_to(
                     self.partition_first_sector_lba + first_sector_lba + i,
                     &mut sectors[(i as usize)..((i + 1) as usize)],
                 )?;
@@ -249,10 +248,10 @@ impl Fat {
         );
 
         let sector_buffer: &mut [Sector] = cast_slice_mut(buffer);
-        let mut ds = self.data_source.lock().unwrap();
+        let mut data_source = self.data_source.lock().unwrap();
 
         for i in 0..self.bpb.sectors_per_cluster {
-            ds.read_sectors_to(
+            data_source.read_sectors_to(
                 self.partition_first_sector_lba
                     + self.convert_cluster_number_to_sector_number(cluster)
                     + i as u32,
@@ -345,7 +344,7 @@ impl Fat {
     }
 
     /// Saves modified file allocation table to the underlying storage
-    fn save_fat(&self) -> Result<(), FileSystemError> {
+    pub fn save_fat(&self) -> Result<(), FileSystemError> {
         let mut data_source = self.data_source.lock().unwrap();
 
         let fat_size = self.bpb.sectors_per_fat_32 as usize;
@@ -379,7 +378,7 @@ impl Fat {
             .iter()
             .cloned()
             .enumerate()
-            .filter(|entry| entry.1 == 0x00)
+            .filter(|entry| entry.1 == FAT_FREE_SECTOR)
             .take(count + 1)
     }
 
@@ -406,17 +405,12 @@ impl Fat {
     fn read_bpb(
         disk: Arc<Mutex<dyn FatDataSource>>,
         partition_first_sector_lba: u32,
-    ) -> BiosParameterBlock {
-        let bpb = BiosParameterBlock::try_from(
-            disk.lock()
-                .unwrap()
-                .read_sectors(partition_first_sector_lba, 1)
-                .unwrap()[0]
+    ) -> Result<BiosParameterBlock, FileSystemError> {
+        Ok(BiosParameterBlock::try_from(
+            disk.lock().unwrap()
+                .read_sectors(partition_first_sector_lba, 1)?[0]
                 .as_slice(),
-        )
-        .unwrap();
-
-        bpb
+        ).map_err(|_| FileSystemError::BadData)?)
     }
 
     /// Retrieves a file entry and its corresponding cluster number by its path.
@@ -491,10 +485,12 @@ impl Fat {
         file_entry: &FatFileEntry,
         directory: &FatDirectory,
         current_entry_cluster: u32,
-    ) {
-        self.remove_file_entry(file_entry, current_entry_cluster).unwrap();
+    ) -> Result<(), FileSystemError> {
+        self.remove_file_entry(file_entry, current_entry_cluster)?;
 
         self.serialize_file_entry(None, file_entry, directory.content_cluster);
+
+        Ok(())
     }
 
     /// Serializes a file entry or updates existing.
@@ -555,31 +551,30 @@ impl Fat {
         starting_directory_cluster: u32,
         starting_index: usize,
     ) -> Result<(), FileSystemError> {
-        let mut writing_index = starting_index;
         let mut raw_file_entries_iterator = file_entry.raw.iter().skip(1);
+        let mut writing_index = starting_index;
 
         for cluster in self.get_clusters_for_file(starting_directory_cluster) {
             let mut file_listing = self.get_raw_file_listing_from_cluster(cluster)?;
 
-            for index in writing_index..file_listing.len() {
+            for file_listing in file_listing.iter_mut().skip(writing_index) {
                 if let Some(raw_file_entry) = raw_file_entries_iterator.next() {
-                    file_listing[index] = *raw_file_entry;
+                    *file_listing = *raw_file_entry;
                 } else {
                     // If there's no more entries left, write SFN at the end (SFN is always at first index
                     // in the raw array.
-                    file_listing[index] = file_entry.raw[0];
+                    *file_listing = file_entry.raw[0];
+
+                    writing_index += 1;
 
                     break;
                 }
             }
 
-            // For next clusters start writing from the beginning.
-            writing_index = 0;
-
-            self.save_listing_to_the_disk(cluster, &file_listing)?;
+            self.save_listing_to_the_disk(cluster, file_listing)?;
         }
 
-        // Make sure we've written every entry
+        // Make sure we've written all entries
         assert_eq!(raw_file_entries_iterator.len(), 0);
 
         Ok(())
@@ -615,7 +610,7 @@ impl Fat {
                     file_listing[size - index - 1].name[0] = FAT_FREE_ENTRY;
 
                     // Save modified listing to the disk
-                    self.save_listing_to_the_disk(cluster, &file_listing)?;
+                    self.save_listing_to_the_disk(cluster, file_listing.clone())?;
 
                     if !is_lfn {
                         // Our job is done here because it's single entry
@@ -628,7 +623,7 @@ impl Fat {
                 }
 
                 if lfn_handling {
-                    let attributes = FatFileAttributes::from_bits(entry.attr).unwrap();
+                    let attributes = FatFileAttributes::from_bits(entry.attr).expect("Failed to parse attributes");
 
                     if attributes.is_long_name_entry() {
                         // Zero and mark current entry as free
@@ -636,7 +631,7 @@ impl Fat {
                         file_listing[size - index - 1].name[0] = FAT_FREE_ENTRY;
 
                         // Save modified listing to the disk
-                        self.save_listing_to_the_disk(cluster, &file_listing)?;
+                        self.save_listing_to_the_disk(cluster, file_listing.clone())?;
                     } else {
                         break;
                     }
@@ -657,10 +652,10 @@ impl Fat {
     fn save_listing_to_the_disk(
         &mut self,
         cluster: u32,
-        file_listing: &Vec<RawFatFileEntry>,
+        file_listing: Vec<RawFatFileEntry>,
     ) -> Result<(), FileSystemError> {
         let raw_file_listing = RawFileListing {
-            files: file_listing.clone(),
+            files: file_listing,
         };
 
         let mut buffer = BitVec::with_capacity(
@@ -668,7 +663,7 @@ impl Fat {
             (self.bpb.bytes_per_sector * self.bpb.sectors_per_cluster as u16 * 8) as usize,
         );
 
-        raw_file_listing.write(&mut buffer, ()).unwrap();
+        raw_file_listing.write(&mut buffer, ()).expect("Failed to write RawFileListing");
 
         self.write_cluster(cluster, buffer.as_raw_slice())?;
 
@@ -696,10 +691,10 @@ impl Fat {
         assert!(n < 20);
 
         let mut currently_contiguous_entries_count = 0;
-        let mut currently_contiguous_chain_starting_index = -1i32;
+        let mut currently_contiguous_chain_starting_index = None;
 
         for cluster in self.get_clusters_for_file(directory_cluster) {
-            let listing = self.get_raw_file_listing_from_cluster(cluster).unwrap();
+            let listing = self.get_raw_file_listing_from_cluster(cluster).expect("Failed to get file listing from cluster");
 
             for (idx, entry) in listing.iter().enumerate() {
                 let first_byte = entry.name[0];
@@ -710,19 +705,21 @@ impl Fat {
                 }
 
                 if first_byte == FAT_FREE_ENTRY {
-                    if currently_contiguous_chain_starting_index == -1 {
-                        currently_contiguous_chain_starting_index = idx as i32;
+                    if currently_contiguous_chain_starting_index.is_none() {
+                        currently_contiguous_chain_starting_index = Some(idx as i32);
                     }
 
                     currently_contiguous_entries_count += 1;
 
                     if currently_contiguous_entries_count == n {
-                        return Some((cluster, currently_contiguous_chain_starting_index as usize));
+                        // Safety: Safe, because starting index is Some() every time entries_count
+                        // is bigger than 0
+                        return Some((cluster, currently_contiguous_chain_starting_index.unwrap() as usize));
                     }
                 } else {
                     // It's not 0x00 nor FREE_ENTRY mark, so probably a valid entry
                     currently_contiguous_entries_count = 0;
-                    currently_contiguous_chain_starting_index = -1;
+                    currently_contiguous_chain_starting_index = None;
                 }
             }
         }
@@ -763,7 +760,7 @@ impl Fat {
             {
                 let first_byte = entry.name[0];
 
-                if first_byte == 0x00 || first_byte == FAT_FREE_ENTRY {
+                if first_byte == FAT_FREE_SECTOR as u8 || first_byte == FAT_FREE_ENTRY {
                     if !chain_found {
                         chain_found = true;
                         starting_cluster = cluster;
@@ -793,8 +790,7 @@ impl Fat {
         // There's no sufficient entries in directory so need to allocate some
         let current_last_cluster = clusters.last().unwrap();
         let first_new_cluster = self
-            .allocate_and_link_clusters(1)
-            .unwrap()
+            .allocate_and_link_clusters(1)?
             .next()
             .unwrap()
             .0;
@@ -817,7 +813,7 @@ impl Fat {
     ///
     /// A `NaiveDateTime` representing the current date and time.
     pub fn current_datetime(&self) -> NaiveDateTime {
-        self.time_source.lock().unwrap().now()
+        self.time_source.now()
     }
 }
 

@@ -62,8 +62,8 @@ pub trait FatDataSource {
         buffer: &mut [Sector],
     ) -> Result<(), FileSystemError>;
 
-    /// Writes data from the provided `buffer` to the specified `starting_sector`.
-    fn write_sector(&mut self, starting_sector: u32, buffer: &[u8]) -> Result<(), FileSystemError>;
+    /// Writes data from the provided `buffer` to the specified `sector`.
+    fn write_sector(&mut self, sector: u32, buffer: &[u8]) -> Result<(), FileSystemError>;
 }
 
 /// A trait for retrieving the current date and time.
@@ -147,7 +147,7 @@ impl FileListing {
     fn read_files(
         rest: &BitSlice<u8, Msb0>,
     ) -> Result<(&BitSlice<u8, Msb0>, Vec<FatEntry>), DekuError> {
-        let mut buffer: Vec<FatEntry> = vec![];
+        let mut buffer: Vec<FatEntry> = Vec::with_capacity((rest.len() / 8) / size_of::<RawFatFileEntry>());
         let mut remaining_slice = rest;
 
         loop {
@@ -267,17 +267,17 @@ impl DekuWrite for RawFatFileEntry {
             byte.write(output, ())?;
         }
 
-        self.attr.write(output, ()).unwrap();
-        self.nt_res.write(output, ()).unwrap();
-        self.creation_time_milliseconds.write(output, ()).unwrap();
-        self.creation_time.write(output, ()).unwrap();
-        self.creation_date.write(output, ()).unwrap();
-        self.last_access_date.write(output, ()).unwrap();
-        self.first_cluster_high.write(output, ()).unwrap();
-        self.last_write_time.write(output, ()).unwrap();
-        self.last_write_date.write(output, ()).unwrap();
-        self.first_cluster_low.write(output, ()).unwrap();
-        self.file_size.write(output, ()).unwrap();
+        self.attr.write(output, ())?;
+        self.nt_res.write(output, ())?;
+        self.creation_time_milliseconds.write(output, ())?;
+        self.creation_time.write(output, ())?;
+        self.creation_date.write(output, ())?;
+        self.last_access_date.write(output, ())?;
+        self.first_cluster_high.write(output, ())?;
+        self.last_write_time.write(output, ())?;
+        self.last_write_date.write(output, ())?;
+        self.first_cluster_low.write(output, ())?;
+        self.file_size.write(output, ())?;
 
         Ok(())
     }
@@ -288,9 +288,9 @@ impl DekuWrite for RawFatFileEntry {
 pub struct FatFileEntry {
     name: String,
     attr: FatFileAttributes,
-    creation_time: NaiveDateTime,
-    last_access_time: NaiveDateTime,
-    last_write_time: NaiveDateTime,
+    creation_date_time: NaiveDateTime,
+    last_access_date_time: NaiveDateTime,
+    last_write_date_time: NaiveDateTime,
     file_size: u32,
     raw: Vec<RawFatFileEntry>,
 }
@@ -322,19 +322,8 @@ impl FatFileEntry {
 
         self.raw[0].name = bytes[0..11].to_vec().try_into().unwrap();
 
-        let mut lfn_checksum: u8 = 0;
-        for i in (0..=10).rev() {
-            let checksum_copy = lfn_checksum;
 
-            if (checksum_copy & 1) == 1 {
-                lfn_checksum = 0x80;
-            } else {
-                lfn_checksum = 0;
-            }
-
-            lfn_checksum = lfn_checksum.wrapping_add((checksum_copy >> 1) + self.raw[0].name[10 - i]);
-        }
-
+        let lfn_checksum = self.compute_lfn_checksum(&self.raw[0].name);
         let lfn_name_length = ucs2::str_num_ucs2_chars(&self.name).unwrap();
         let lfn_name_buffer_length = (lfn_name_length / 13) * 13 + 13;
         let mut lfn_buffer: Vec<u16> = vec![0u16; lfn_name_buffer_length];
@@ -374,26 +363,26 @@ impl FatFileEntry {
         self.raw[0].attr = attr.bits();
     }
 
-    pub fn set_creation_time(&mut self, creation_time: NaiveDateTime) {
-        self.creation_time = creation_time;
+    pub fn set_creation_date_time(&mut self, creation_date_time: NaiveDateTime) {
+        self.creation_date_time = creation_date_time;
 
-        let (date, time) = Self::create_fields_from_datetime(&self.creation_time);
+        let (date, time) = Self::create_fields_from_date_time(&self.creation_date_time);
         self.raw[0].creation_date = date.into_bits();
         self.raw[0].creation_time = time.into_bits();
     }
 
-    pub fn set_last_access_time(&mut self, last_access_time: NaiveDateTime) {
-        self.last_access_time = last_access_time;
+    pub fn set_last_access_date_time(&mut self, last_access_date_time: NaiveDateTime) {
+        self.last_access_date_time = last_access_date_time;
 
-        let (date, _) = Self::create_fields_from_datetime(&self.last_access_time);
+        let (date, _) = Self::create_fields_from_date_time(&self.last_access_date_time);
         self.raw[0].last_access_date = date.into_bits();
         // There's no last_access_time sadly
     }
 
-    pub fn set_last_write_time(&mut self, last_write_time: NaiveDateTime) {
-        self.last_write_time = last_write_time;
+    pub fn set_last_write_date_time(&mut self, last_write_date_time: NaiveDateTime) {
+        self.last_write_date_time = last_write_date_time;
 
-        let (date, time) = Self::create_fields_from_datetime(&self.last_write_time);
+        let (date, time) = Self::create_fields_from_date_time(&self.last_write_date_time);
         self.raw[0].last_write_date = date.into_bits();
         self.raw[0].last_write_time = time.into_bits();
     }
@@ -412,16 +401,16 @@ impl FatFileEntry {
         self.attr
     }
 
-    pub fn creation_time(&self) -> NaiveDateTime {
-        self.creation_time
+    pub fn creation_date_time(&self) -> NaiveDateTime {
+        self.creation_date_time
     }
 
     pub fn last_access_date_time(&self) -> NaiveDateTime {
-        self.last_access_time
+        self.last_access_date_time
     }
 
     pub fn last_write_date_time(&self) -> NaiveDateTime {
-        self.last_write_time
+        self.last_write_date_time
     }
 
     pub fn file_size(&self) -> u32 {
@@ -432,7 +421,7 @@ impl FatFileEntry {
         self.raw.first().unwrap()
     }
 
-    fn create_datetime_from_fields(date: FatDateFormat, time: FatTimeFormat) -> NaiveDateTime {
+    fn create_date_time_from_fields(date: FatDateFormat, time: FatTimeFormat) -> NaiveDateTime {
         // For the FAT's format of encoding datetime, see
         // `Date and Time Formats` at `documents/FAT32 Specification.pdf`, p. 25
 
@@ -451,7 +440,7 @@ impl FatFileEntry {
             .unwrap()
     }
 
-    fn create_fields_from_datetime(date_time: &NaiveDateTime) -> (FatDateFormat, FatTimeFormat) {
+    fn create_fields_from_date_time(date_time: &NaiveDateTime) -> (FatDateFormat, FatTimeFormat) {
         // For the FAT's format of encoding datetime, see
         // `Date and Time Formats` at `documents/FAT32 Specification.pdf`, p. 25
 
@@ -467,40 +456,58 @@ impl FatFileEntry {
 
         (fat_date, fat_time)
     }
+
+    fn compute_lfn_checksum(&self, name: &[u8; 11]) -> u8 {
+        let mut lfn_checksum: u8 = 0;
+
+        for i in (0..=10).rev() {
+            let checksum_copy = lfn_checksum;
+
+            if (checksum_copy & 1) == 1 {
+                lfn_checksum = 0x80;
+            } else {
+                lfn_checksum = 0;
+            }
+
+            lfn_checksum = lfn_checksum.wrapping_add((checksum_copy >> 1) + name[10 - i]);
+        }
+
+        lfn_checksum
+
+    }
 }
 
 impl From<RawFatFileEntry> for FatFileEntry {
     fn from(value: RawFatFileEntry) -> Self {
-        let creation_time = {
+        let creation_date_time = {
             let date = FatDateFormat::from_bits(value.creation_date);
             let time = FatTimeFormat::from_bits(value.creation_time);
 
-            Self::create_datetime_from_fields(date, time)
+            Self::create_date_time_from_fields(date, time)
         };
 
-        let last_access_time = {
+        let last_access_date_time = {
             let date = FatDateFormat::from_bits(value.last_access_date);
             let time = FatTimeFormat::from_bits(value.last_write_time);
 
-            Self::create_datetime_from_fields(date, time)
+            Self::create_date_time_from_fields(date, time)
         };
 
-        let last_write_time = {
+        let last_write_date_time = {
             let date = FatDateFormat::from_bits(value.last_write_date);
             let time = FatTimeFormat::from_bits(value.last_write_time);
 
-            Self::create_datetime_from_fields(date, time)
+            Self::create_date_time_from_fields(date, time)
         };
 
         FatFileEntry {
             name: String::from_utf8_lossy(&value.name[..])
-                .to_string()
                 .trim()
                 .to_string(),
             attr: FatFileAttributes::from_bits(value.attr).unwrap(),
-            creation_time,
-            last_access_time,
-            last_write_time,
+            creation_date_time,
+            last_access_date_time,
+            last_write_date_time,
             file_size: value.file_size,
             raw: vec![value],
         }
@@ -671,13 +678,13 @@ mod tests {
 
         fn write_sector(
             &mut self,
-            starting_sector: u32,
+            sector: u32,
             buffer: &[u8],
         ) -> Result<(), FileSystemError> {
-            let starting_offset = starting_sector * FAT_SECTOR_SIZE as u32;
+            let starting_offset = sector * FAT_SECTOR_SIZE as u32;
             assert_eq!(buffer.len(), 512);
 
-            self.file.seek(SeekFrom::Start(starting_offset as u64));
+            self.file.seek(SeekFrom::Start(starting_offset as u64)).unwrap();
             self.file.write(buffer).unwrap();
 
             Ok(())
@@ -705,12 +712,12 @@ mod tests {
 
         fn write_sector(
             &mut self,
-            starting_sector: u32,
+            sector: u32,
             buffer: &[u8],
         ) -> Result<(), FileSystemError> {
             assert_eq!(buffer.len(), 512);
 
-            let starting_offset = (starting_sector * FAT_SECTOR_SIZE as u32) as usize;
+            let starting_offset = (sector * FAT_SECTOR_SIZE as u32) as usize;
 
             self.data[starting_offset..(starting_offset + buffer.len())].copy_from_slice(buffer);
 
@@ -732,9 +739,8 @@ mod tests {
         let data_source = InMemoryFatDataSource { data: vec };
         Fat::new(
             Arc::new(Mutex::new(data_source)),
-            Arc::new(Mutex::new(StdFatTimeSource {})),
+            Arc::new(StdFatTimeSource {}),
             0,
-            (IMAGE1_DATA.len() / FAT_SECTOR_SIZE) as u32,
         )
     }
 
@@ -865,7 +871,7 @@ mod tests {
         let current_time = Utc::now().naive_utc();
 
         assert_eq!(
-            file.creation_datetime(),
+            file.creation_date_time(),
             NaiveDateTime::parse_from_str("2024-06-16 15:06:04", "%Y-%m-%d %H:%M:%S").unwrap()
         );
         assert_eq!(
@@ -873,11 +879,11 @@ mod tests {
             NaiveDateTime::parse_from_str("2024-06-16 15:06:04", "%Y-%m-%d %H:%M:%S").unwrap()
         );
 
-        file.set_creation_datetime(current_time)?;
-        file.set_modification_datetime(current_time)?;
+        file.set_creation_date_time(current_time)?;
+        file.set_modification_date_time(current_time)?;
 
-        directory.set_creation_datetime(current_time)?;
-        directory.set_modification_datetime(current_time)?;
+        directory.set_creation_date_time(current_time)?;
+        directory.set_modification_date_time(current_time)?;
 
         // re-read file information from the disk
         let file2 = fat.open_file("books/english/macbeth.txt")?;
@@ -885,14 +891,14 @@ mod tests {
 
         assert!(
             file2
-                .creation_datetime()
+                .creation_date_time()
                 .signed_duration_since(current_time)
                 .num_seconds()
                 <= 3
         );
         assert!(
             file2
-                .modification_datetime()
+                .modification_date_time()
                 .signed_duration_since(current_time)
                 .num_seconds()
                 <= 3
@@ -946,8 +952,8 @@ mod tests {
         let mut file = fat.open_file("fruits/random things/random2/Methamphetamine.txt")?;
         let mut dir = fat.open_directory("filesystems/Resilient File System")?;
 
-        file.rename("meth.txt")?;
-        dir.rename("ReFS")?;
+        file.rename("meth.txt".to_string())?;
+        dir.rename("ReFS".to_string())?;
 
         fat.open_file("fruits/random things/random2/meth.txt")?;
         fat.open_directory("filesystems/ReFS")?;

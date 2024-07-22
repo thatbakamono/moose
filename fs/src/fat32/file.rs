@@ -8,7 +8,7 @@ use crate::fat32::directory::FatDirectory;
 use crate::fat32::{FatFileAttributes, FatFileEntry};
 use crate::{Attributes, File, FileSystemError};
 
-use super::fat::Fat;
+use super::fat::{Fat, FAT_FREE_SECTOR};
 
 pub struct FatFile {
     pub(crate) filesystem: Rc<RefCell<Fat>>,
@@ -25,7 +25,7 @@ impl File for FatFile {
         assert!(!buffer.is_empty());
 
         if (offset + buffer.len()) > (self.file_size as usize) {
-            return Err(FileSystemError::NotFound);
+            return Err(FileSystemError::ReadOutOfBounds);
         }
 
         let cluster_size = (self.filesystem.borrow().bpb.sectors_per_cluster as u16
@@ -35,6 +35,9 @@ impl File for FatFile {
 
         let mut to_read = buffer.len();
         let mut reading_offset = 0;
+
+        let mut temp_buffer: Vec<u8> = vec![0; cluster_size];
+        let temp_slice = temp_buffer.as_mut_slice();
 
         for cluster in self
             .filesystem
@@ -50,9 +53,6 @@ impl File for FatFile {
 
             if offset_within_cluster == 0 {
                 if copy_size < cluster_size {
-                    let mut temp_buffer: Vec<u8> = vec![0; cluster_size];
-                    let temp_slice = temp_buffer.as_mut_slice();
-
                     // Copy whole cluster to the temporary buffer
                     self.filesystem
                         .borrow()
@@ -77,9 +77,6 @@ impl File for FatFile {
                     reading_offset += cluster_size;
                 }
             } else {
-                let mut temp_buffer: Vec<u8> = vec![0; cluster_size];
-                let temp_slice = temp_buffer.as_mut_slice();
-
                 // Copy whole cluster to the temporary buffer
                 self.filesystem
                     .borrow()
@@ -121,6 +118,9 @@ impl File for FatFile {
             .skip(clusters_to_skip);
         let last_cluster = clusters.clone().last().unwrap();
 
+        let mut temp_buffer: Vec<u8> = vec![0; cluster_size];
+        let temp_slice = temp_buffer.as_mut_slice();
+
         for cluster in clusters {
             if to_write == 0 {
                 break;
@@ -130,9 +130,6 @@ impl File for FatFile {
 
             if offset_within_cluster == 0 {
                 if copy_size < cluster_size {
-                    let mut temp_buffer: Vec<u8> = vec![0; cluster_size];
-                    let temp_slice = temp_buffer.as_mut_slice();
-
                     // Copy whole cluster to the temporary buffer
                     self.filesystem
                         .borrow()
@@ -160,9 +157,6 @@ impl File for FatFile {
                     writing_offset += cluster_size;
                 }
             } else {
-                let mut temp_buffer: Vec<u8> = vec![0; cluster_size];
-                let temp_slice = temp_buffer.as_mut_slice();
-
                 // Copy whole cluster to the temporary buffer
                 self.filesystem
                     .borrow()
@@ -217,10 +211,11 @@ impl File for FatFile {
         self.filesystem.borrow_mut().file_allocation_table[last_cluster as usize] =
             allocated_clusters.first().unwrap().0 as u32;
 
+        let mut temp_buffer: Vec<u8> = vec![0; cluster_size];
+        let temp_slice = temp_buffer.as_mut_slice();
+
         // Perform write
         for new_cluster in allocated_clusters {
-            let mut temp_buffer: Vec<u8> = vec![0; cluster_size];
-            let temp_slice = temp_buffer.as_mut_slice();
             let copy_size = min(to_write, cluster_size) - 1;
 
             // Overwrite read cluster with user supplied data starting at the writing_offset
@@ -248,10 +243,10 @@ impl File for FatFile {
         Ok(())
     }
 
-    fn rename(&mut self, name: &str) -> Result<(), FileSystemError> {
+    fn rename(&mut self, name: String) -> Result<(), FileSystemError> {
         let old = self.file_entry.clone();
 
-        self.file_entry.set_name(name.to_string());
+        self.file_entry.set_name(name);
 
         self.filesystem.borrow_mut().serialize_file_entry(
             Some(&old),
@@ -267,7 +262,7 @@ impl File for FatFile {
             &self.file_entry,
             directory,
             self.file_entry_cluster,
-        );
+        )?;
 
         Ok(())
     }
@@ -307,9 +302,9 @@ impl File for FatFile {
         let new_last_cluster_index = file_clusters
             .clone()
             .enumerate()
-            .find(|&x| x.0 == new_last_cluster)
-            .unwrap()
-            .0;
+            .map(|(index, _cluster)| index)
+            .find(|&index| index == new_last_cluster)
+            .unwrap();
 
         // Skip `new_last_cluster_index` used entries in iterator
         file_clusters
@@ -318,7 +313,7 @@ impl File for FatFile {
 
         // Mark remaining clusters as free
         file_clusters.for_each(|cluster| {
-            fat.file_allocation_table[cluster as usize] = 0x00;
+            fat.file_allocation_table[cluster as usize] = FAT_FREE_SECTOR;
         });
 
         // Mark last cluster as end of file
@@ -334,11 +329,11 @@ impl File for FatFile {
         Ok(())
     }
 
-    fn set_creation_datetime(
+    fn set_creation_date_time(
         &mut self,
-        creation_datetime: NaiveDateTime,
+        creation_date_time: NaiveDateTime,
     ) -> Result<(), FileSystemError> {
-        self.file_entry.set_creation_time(creation_datetime);
+        self.file_entry.set_creation_date_time(creation_date_time);
 
         self.filesystem.borrow_mut().serialize_file_entry(
             Some(&self.file_entry),
@@ -349,11 +344,11 @@ impl File for FatFile {
         Ok(())
     }
 
-    fn set_modification_datetime(
+    fn set_modification_date_time(
         &mut self,
-        modification_datetime: NaiveDateTime,
+        modification_date_time: NaiveDateTime,
     ) -> Result<(), FileSystemError> {
-        self.file_entry.set_last_write_time(modification_datetime);
+        self.file_entry.set_last_write_date_time(modification_date_time);
 
         self.filesystem.borrow_mut().serialize_file_entry(
             Some(&self.file_entry),
@@ -381,12 +376,12 @@ impl File for FatFile {
         self.file_entry.file_size as usize
     }
 
-    fn creation_datetime(&self) -> NaiveDateTime {
-        self.file_entry.creation_time
+    fn creation_date_time(&self) -> NaiveDateTime {
+        self.file_entry.creation_date_time
     }
 
-    fn modification_datetime(&self) -> NaiveDateTime {
-        self.file_entry.last_write_time
+    fn modification_date_time(&self) -> NaiveDateTime {
+        self.file_entry.last_write_date_time
     }
 
     fn attributes(&self) -> Attributes {

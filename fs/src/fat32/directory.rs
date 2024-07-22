@@ -16,7 +16,7 @@ pub struct FatDirectory {
 impl FatDirectory {
     fn create_entry(
         &mut self,
-        name: &String,
+        name: String,
         attributes: Attributes,
         is_directory: bool,
     ) -> Result<(FatFileEntry, u32), FileSystemError> {
@@ -37,11 +37,11 @@ impl FatDirectory {
         };
 
         fat_entry.raw.push(raw_file_entry);
-        fat_entry.set_name(name.to_string());
+        fat_entry.set_name(name);
         fat_entry.set_attr(fat_attributes);
-        fat_entry.set_creation_time(current_time);
-        fat_entry.set_last_access_time(current_time);
-        fat_entry.set_last_write_time(current_time);
+        fat_entry.set_creation_date_time(current_time);
+        fat_entry.set_last_access_date_time(current_time);
+        fat_entry.set_last_write_date_time(current_time);
 
         let cluster = fat
             .get_clusters_for_file(self.content_cluster)
@@ -72,15 +72,15 @@ impl Directory for FatDirectory {
                     if entry.attr().is_directory() {
                         FileSystemEntry::Directory {
                             name: entry.name().to_string(),
-                            creation_time: entry.creation_time,
-                            modification_time: entry.last_write_time,
+                            creation_date_time: entry.creation_date_time,
+                            modification_date_time: entry.last_write_date_time,
                             attributes: Attributes::from(entry.attr),
                         }
                     } else {
                         FileSystemEntry::File {
                             name: entry.name().to_string(),
-                            creation_time: entry.creation_time,
-                            modification_time: entry.last_write_time,
+                            creation_date_time: entry.creation_date_time,
+                            modification_date_time: entry.last_write_date_time,
                             attributes: Attributes::from(entry.attr),
                         }
                     }
@@ -96,7 +96,7 @@ impl Directory for FatDirectory {
         name: String,
         attributes: Attributes,
     ) -> Result<Self::File, FileSystemError> {
-        let (file_entry, starting_cluster) = self.create_entry(&name, attributes, false)?;
+        let (file_entry, starting_cluster) = self.create_entry(name, attributes, false)?;
 
         Ok(FatFile {
             file_entry,
@@ -112,7 +112,7 @@ impl Directory for FatDirectory {
         name: String,
         attributes: Attributes,
     ) -> Result<Self, FileSystemError> {
-        let (file_entry, starting_cluster) = self.create_entry(&name, attributes, true)?;
+        let (file_entry, starting_cluster) = self.create_entry(name, attributes, true)?;
 
         Ok(FatDirectory {
             filesystem: Rc::clone(&self.filesystem),
@@ -131,10 +131,10 @@ impl Directory for FatDirectory {
         Ok(())
     }
 
-    fn rename(&mut self, name: &str) -> Result<(), FileSystemError> {
+    fn rename(&mut self, name: String) -> Result<(), FileSystemError> {
         let old = self.file_entry.clone();
 
-        self.file_entry.set_name(name.to_string());
+        self.file_entry.set_name(name);
 
         self.filesystem.borrow_mut().serialize_file_entry(
             Some(&old),
@@ -150,16 +150,16 @@ impl Directory for FatDirectory {
             &self.file_entry,
             directory,
             self.file_entry_cluster,
-        );
+        )?;
 
         Ok(())
     }
 
-    fn set_creation_datetime(
+    fn set_creation_date_time(
         &mut self,
-        creation_datetime: NaiveDateTime,
+        creation_date_time: NaiveDateTime,
     ) -> Result<(), FileSystemError> {
-        self.file_entry.set_creation_time(creation_datetime);
+        self.file_entry.set_creation_date_time(creation_date_time);
 
         self.filesystem.borrow_mut().serialize_file_entry(
             Some(&self.file_entry),
@@ -170,11 +170,11 @@ impl Directory for FatDirectory {
         Ok(())
     }
 
-    fn set_modification_datetime(
+    fn set_modification_date_time(
         &mut self,
-        modification_datetime: NaiveDateTime,
+        modification_date_time: NaiveDateTime,
     ) -> Result<(), FileSystemError> {
-        self.file_entry.set_last_write_time(modification_datetime);
+        self.file_entry.set_last_write_date_time(modification_date_time);
 
         self.filesystem.borrow_mut().serialize_file_entry(
             Some(&self.file_entry),
@@ -199,11 +199,11 @@ impl Directory for FatDirectory {
     }
 
     fn creation_date_time(&self) -> NaiveDateTime {
-        self.file_entry.creation_time
+        self.file_entry.creation_date_time
     }
 
     fn modification_date_time(&self) -> NaiveDateTime {
-        self.file_entry.last_write_time
+        self.file_entry.last_write_date_time
     }
 
     fn attributes(&self) -> Attributes {

@@ -51,7 +51,7 @@ pub trait File: Sized {
     fn delete(&mut self) -> Result<(), FileSystemError>;
 
     /// Renames the file to the given name.
-    fn rename(&mut self, name: &str) -> Result<(), FileSystemError>;
+    fn rename(&mut self, name: String) -> Result<(), FileSystemError>;
 
     /// Moves the file to the specified directory.
     fn move_to(&mut self, directory: &Self::Directory) -> Result<(), FileSystemError>;
@@ -59,16 +59,16 @@ pub trait File: Sized {
     /// Shrinks the file to the specified new size.
     fn shrink(&mut self, new_size: usize) -> Result<(), FileSystemError>;
 
-    /// Sets the creation datetime of the file.
-    fn set_creation_datetime(
+    /// Sets the creation date time of the file.
+    fn set_creation_date_time(
         &mut self,
-        creation_datetime: NaiveDateTime,
+        creation_date_time: NaiveDateTime,
     ) -> Result<(), FileSystemError>;
 
-    /// Sets the modification datetime of the file.
-    fn set_modification_datetime(
+    /// Sets the modification date time of the file.
+    fn set_modification_date_time(
         &mut self,
-        modification_datetime: NaiveDateTime,
+        modification_date_time: NaiveDateTime,
     ) -> Result<(), FileSystemError>;
 
     /// Sets the attributes of the file.
@@ -77,11 +77,11 @@ pub trait File: Sized {
     /// Returns the size of the file in bytes.
     fn file_size(&self) -> usize;
 
-    /// Returns the creation datetime of the file.
-    fn creation_datetime(&self) -> NaiveDateTime;
+    /// Returns the creation date time of the file.
+    fn creation_date_time(&self) -> NaiveDateTime;
 
-    /// Returns the modification datetime of the file.
-    fn modification_datetime(&self) -> NaiveDateTime;
+    /// Returns the modification date time of the file.
+    fn modification_date_time(&self) -> NaiveDateTime;
 
     /// Returns the attributes of the file.
     fn attributes(&self) -> Attributes;
@@ -126,30 +126,30 @@ pub trait Directory: Sized {
     fn delete(&mut self) -> Result<(), FileSystemError>;
 
     /// Renames the directory to the given name.
-    fn rename(&mut self, name: &str) -> Result<(), FileSystemError>;
+    fn rename(&mut self, name: String) -> Result<(), FileSystemError>;
 
     /// Moves the directory to another directory.
     fn move_to(&mut self, directory: &Self) -> Result<(), FileSystemError>;
 
-    /// Sets the creation datetime of the directory.
-    fn set_creation_datetime(
+    /// Sets the creation date time of the directory.
+    fn set_creation_date_time(
         &mut self,
-        creation_datetime: NaiveDateTime,
+        creation_date_time: NaiveDateTime,
     ) -> Result<(), FileSystemError>;
 
-    /// Sets the modification datetime of the directory.
-    fn set_modification_datetime(
+    /// Sets the modification date time of the directory.
+    fn set_modification_date_time(
         &mut self,
-        modification_datetime: NaiveDateTime,
+        modification_date_time: NaiveDateTime,
     ) -> Result<(), FileSystemError>;
 
     /// Sets the attributes of the directory.
     fn set_attributes(&mut self, attributes: Attributes) -> Result<(), FileSystemError>;
 
-    /// Returns the creation datetime of the directory.
+    /// Returns the creation date time of the directory.
     fn creation_date_time(&self) -> NaiveDateTime;
 
-    /// Returns the modification datetime of the directory.
+    /// Returns the modification date time of the directory.
     fn modification_date_time(&self) -> NaiveDateTime;
 
     /// Returns the attributes of the directory.
@@ -167,10 +167,10 @@ pub enum FileSystemEntry {
     File {
         /// The name of the file.
         name: String,
-        /// The creation time of the file.
-        creation_time: NaiveDateTime,
-        /// The modification time of the file.
-        modification_time: NaiveDateTime,
+        /// The creation date time of the file.
+        creation_date_time: NaiveDateTime,
+        /// The modification date time of the file.
+        modification_date_time: NaiveDateTime,
         /// The attributes of the file.
         attributes: Attributes,
     },
@@ -178,10 +178,10 @@ pub enum FileSystemEntry {
     Directory {
         /// The name of the directory.
         name: String,
-        /// The creation time of the directory.
-        creation_time: NaiveDateTime,
-        /// The modification time of the directory.
-        modification_time: NaiveDateTime,
+        /// The creation date time of the directory.
+        creation_date_time: NaiveDateTime,
+        /// The modification date time of the directory.
+        modification_date_time: NaiveDateTime,
         /// The attributes of the directory.
         attributes: Attributes,
     },
@@ -231,4 +231,11 @@ pub enum FileSystemError {
 
     #[snafu(display("Invalid argument"))]
     InvalidArgument,
+
+    #[snafu(display("Read out of bounds"))]
+    ReadOutOfBounds,
+
+    #[snafu(display("Bad data"))]
+    BadData,
 }
+
