@@ -1,5 +1,3 @@
-use x86_64::registers::control::{Cr4, Cr4Flags};
-
 pub mod asm;
 pub mod idt;
 
@@ -15,15 +13,11 @@ pub fn perform_arch_initialization() {
         );
         // We don't really need to check whether SSE and SSE2 is present as long mode requires them.
         // We wouldn't even get here without those extensions.
-        Cr4::write(Cr4::read() | Cr4Flags::OSFXSR | Cr4Flags::OSXMMEXCPT_ENABLE);
+        Cr4::write(Cr4::read() | Cr4Flags::OSFXSR | Cr4Flags::OSXMMEXCPT_ENABLE | Cr4Flags::PCID);
 
         arch::asm!("fninit");
     }
 
     // @TODO: GDT
     idt::init_idt();
-
-    unsafe {
-        Cr4::write(Cr4::read() | Cr4Flags::PCID);
-    }
 }
