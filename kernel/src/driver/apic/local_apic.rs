@@ -104,7 +104,15 @@ pub unsafe extern "C" fn ap_start(apic_processor_id: u64, kernel_ptr: *const RwL
 
     *AP_STARTUP_SPINLOCK.write() = 1;
 
-    start_program(physical_memory_offset, stack_pointer, interrupt_stack);
+    static PROGRAM: &[u8] =
+        include_bytes!("../../../../sandbox/target/x86_64-moose/release/sandbox");
+
+    start_program(
+        PROGRAM,
+        physical_memory_offset,
+        stack_pointer,
+        interrupt_stack,
+    );
 }
 
 pub struct LocalApic {

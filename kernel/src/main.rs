@@ -38,9 +38,12 @@ use arch::x86::gdt::{
 };
 use core::alloc::Layout;
 use core::arch::asm;
+use core::cmp::min;
 use core::ptr::addr_of;
 use core::{mem, ptr};
 use driver::net::nic::rtl8139::Rtl8139;
+use goblin::elf::program_header::{PF_R, PF_W, PF_X};
+use goblin::elf::{program_header, Elf};
 use limine::paging::Mode;
 use limine::request::{
     FramebufferRequest, HhdmRequest, KernelAddressRequest, MemoryMapRequest, PagingModeRequest,
@@ -48,7 +51,7 @@ use limine::request::{
 };
 use limine::BaseRevision;
 use log::{error, info};
-use memory::{Frame, PAGE_SIZE};
+use memory::{Frame, MemoryManager, PAGE_SIZE};
 use raw_cpuid::CpuId;
 use spin::{Mutex, RwLock};
 use x86_64::instructions::tlb;
@@ -245,42 +248,25 @@ unsafe extern "C" fn _start() -> ! {
 
     info!("Entering user mode!");
 
-    start_program(physical_memory_offset, stack_pointer, interrupt_stack);
+    static PROGRAM: &[u8] = include_bytes!("../../sandbox/target/x86_64-moose/release/sandbox");
+
+    start_program(
+        PROGRAM,
+        physical_memory_offset,
+        stack_pointer,
+        interrupt_stack,
+    );
 }
 
 pub fn start_program(
+    program: &[u8],
     physical_memory_offset: u64,
     kernel_stack: u64,
     interrupt_stack: *mut InterruptStack,
 ) -> ! {
     let mut memory_manager = memory_manager().write();
 
-    let program_frame = memory_manager.allocate_frame().unwrap();
-
     let stack = unsafe { alloc::alloc::alloc_zeroed(Layout::new::<ThreadStack>()) };
-
-    // temporarily map frame in kernel's address space, so we can write there
-    unsafe {
-        memory_manager
-            .map_any_temporary_for_current_address_space(
-                &program_frame,
-                PageFlags::WRITABLE,
-                |page| {
-                    // int 0x80
-                    *(page.address().as_mut_ptr::<u8>()) = 0xCD;
-                    *(page.address().as_mut_ptr::<u8>().offset(1)) = 0x80;
-
-                    // int 0x80
-                    *(page.address().as_mut_ptr::<u8>().offset(2)) = 0xCD;
-                    *(page.address().as_mut_ptr::<u8>().offset(3)) = 0x80;
-
-                    // jmp $
-                    *(page.address().as_mut_ptr::<u8>().offset(4)) = 0xEB;
-                    *(page.address().as_mut_ptr::<u8>().offset(5)) = 0xFE;
-                },
-            )
-            .unwrap()
-    };
 
     let program_page_table = Box::leak(Box::new(PageTable::new()));
 
@@ -317,6 +303,16 @@ pub fn start_program(
         program_page_table[page_index].set_flags(level_4_page_table_entry.flags());
     }
 
+    // map kernel's heap in program's address space
+    {
+        let kernel_page_table = unsafe { current_page_table(physical_memory_offset) };
+
+        let level_4_page_table_entry = &unsafe { &*kernel_page_table }[136];
+
+        program_page_table[136].set_address(level_4_page_table_entry.address());
+        program_page_table[136].set_flags(level_4_page_table_entry.flags());
+    }
+
     // remap interrupt's stack in program's address space
     for page_index in 0..(mem::size_of::<InterruptStack>() / PAGE_SIZE) as u64 {
         let interrupt_stack_virtual_address =
@@ -344,17 +340,7 @@ pub fn start_program(
         }
     }
 
-    // map program in program's address space
-    unsafe {
-        memory_manager
-            .map(
-                program_page_table,
-                &Page::new(VirtualAddress::new(0xDEA_DBEE_F000)),
-                &program_frame,
-                PageFlags::USER_MODE_ACCESSIBLE | PageFlags::EXECUTABLE,
-            )
-            .unwrap()
-    };
+    let entry_point = Linker::link(program, &mut memory_manager, program_page_table);
 
     // map program's stack in program's address space
     for page_index in 0..(mem::size_of::<ThreadStack>() / PAGE_SIZE) as u64 {
@@ -401,9 +387,161 @@ pub fn start_program(
     // > local variables in scope are not dropped before it is invoked.
     drop(memory_manager);
 
-    enter_user_mode(0xDEA_DBEE_F000 as *const _, unsafe {
+    enter_user_mode(entry_point as *const _, unsafe {
         stack.add(mem::size_of::<ThreadStack>()).offset(-16)
     });
+}
+
+pub trait Read {
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, ()>;
+    fn read_exact(&mut self, buffer: &mut [u8]) -> Result<(), ()>;
+}
+
+pub struct Cursor<T> {
+    inner: T,
+    position: u64,
+}
+
+impl<T> Cursor<T> {
+    pub fn new(inner: T) -> Self {
+        Self { inner, position: 0 }
+    }
+
+    pub fn seek(&mut self, position: u64) {
+        self.position = position;
+    }
+}
+
+impl Read for Cursor<&[u8]> {
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, ()> {
+        let size = min(self.inner.len() - self.position as usize, buffer.len());
+
+        for i in 0..size {
+            buffer[i] = self.inner[self.position as usize + i];
+        }
+
+        Ok(size)
+    }
+
+    fn read_exact(&mut self, buffer: &mut [u8]) -> Result<(), ()> {
+        if (self.inner.len() as u64 - self.position) < buffer.len() as u64 {
+            return Err(());
+        }
+
+        for i in self.position as usize..self.position as usize + buffer.len() {
+            buffer[self.position as usize - i] = self.inner[i];
+        }
+
+        self.position += buffer.len() as u64;
+
+        Ok(())
+    }
+}
+
+pub struct Linker;
+
+impl Linker {
+    fn link(binary: &[u8], memory_manager: &mut MemoryManager, page_table: &mut PageTable) -> u64 {
+        let elf = Elf::parse(binary).unwrap();
+
+        if !elf.is_64 {
+            panic!("Unsupported architecture");
+        }
+
+        if elf.is_lib {
+            panic!();
+        }
+
+        if !elf.little_endian {
+            panic!("Unsupported endianness");
+        }
+
+        if !elf.libraries.is_empty() {
+            unimplemented!();
+        }
+
+        if !elf.shdr_relocs.is_empty() {
+            unimplemented!();
+        }
+
+        if !elf.pltrelocs.is_empty() {
+            unimplemented!();
+        }
+
+        if !elf.dynrels.is_empty() {
+            unimplemented!();
+        }
+
+        if !elf.dynrelas.is_empty() {
+            unimplemented!();
+        }
+
+        if !elf.dynsyms.is_empty() {
+            unimplemented!();
+        }
+
+        let mut reader = Cursor::new(binary);
+        let mut buffer = [0u8; PAGE_SIZE];
+
+        for header in elf.program_headers {
+            if header.p_type == program_header::PT_LOAD {
+                if header.p_flags & PF_R == 0 {
+                    unimplemented!();
+                }
+
+                if header.p_align != PAGE_SIZE as u64 {
+                    unimplemented!();
+                }
+
+                let required_frames =
+                    (header.p_filesz + (PAGE_SIZE as u64 - 1)) as usize / PAGE_SIZE;
+
+                for _ in 0..required_frames {
+                    reader.seek(header.p_offset);
+
+                    let read = reader.read(&mut buffer).unwrap();
+
+                    let page =
+                        Page::new(VirtualAddress::new(header.p_vaddr & 0xfff_ffff_ffff_f000));
+                    let frame = memory_manager.allocate_frame().unwrap();
+
+                    let offset = header.p_vaddr - (header.p_vaddr & 0xfff_ffff_ffff_f000);
+
+                    unsafe {
+                        memory_manager
+                            .map_any_temporary_for_current_address_space(
+                                &frame,
+                                PageFlags::WRITABLE,
+                                |page| {
+                                    let destination = page.address().as_mut_ptr::<u8>();
+
+                                    for i in 0..read {
+                                        *destination.add(offset as usize + i) = buffer[i];
+                                    }
+                                },
+                            )
+                            .unwrap();
+
+                        let mut flags = PageFlags::USER_MODE_ACCESSIBLE;
+
+                        if header.p_flags & PF_W != 0 {
+                            flags |= PageFlags::WRITABLE;
+                        }
+
+                        if header.p_flags & PF_X != 0 {
+                            flags |= PageFlags::EXECUTABLE;
+                        }
+
+                        memory_manager
+                            .map(page_table, &page, &frame, flags)
+                            .unwrap();
+                    }
+                }
+            }
+        }
+
+        elf.entry
+    }
 }
 
 #[repr(C)]
