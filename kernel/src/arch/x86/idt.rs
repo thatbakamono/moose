@@ -306,11 +306,13 @@ pub fn register_interrupt_handler(n: u8, handler: Box<dyn Fn(&InterruptStackFram
 extern "x86-interrupt" fn interrupt_handler<const N: usize>(
     interrupt_stack_frame: InterruptStackFrame,
 ) {
-    let interrupt_handlers = unsafe { &REGISTERED_INTERRUPT_HANDLERS[N] };
+    use_kernel_page_table(|| {
+        let interrupt_handlers = unsafe { &REGISTERED_INTERRUPT_HANDLERS[N] };
 
-    for interrupt_handler in interrupt_handlers {
-        interrupt_handler(&interrupt_stack_frame);
-    }
+        for interrupt_handler in interrupt_handlers {
+            interrupt_handler(&interrupt_stack_frame);
+        }
+    });
 }
 
 extern "x86-interrupt" fn division_error_handler(interrupt_stack_frame: InterruptStackFrame) {
