@@ -13,7 +13,7 @@ pub fn perform_arch_initialization() {
         );
         // We don't really need to check whether SSE and SSE2 is present as long mode requires them.
         // We wouldn't even get here without those extensions.
-        Cr4::write(Cr4::read() | Cr4Flags::OSFXSR | Cr4Flags::OSXMMEXCPT_ENABLE);
+        Cr4::write(Cr4::read() | Cr4Flags::OSFXSR | Cr4Flags::OSXMMEXCPT_ENABLE | Cr4Flags::PCID);
 
         arch::asm!("fninit");
     }
