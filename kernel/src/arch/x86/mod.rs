@@ -5,9 +5,6 @@ use core::arch;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
 pub fn perform_arch_initialization() {
-    // @TODO: GDT
-    idt::init_idt();
-
     unsafe {
         Cr0::write(
             Cr0::read().difference(Cr0Flags::EMULATE_COPROCESSOR)
@@ -20,4 +17,7 @@ pub fn perform_arch_initialization() {
 
         arch::asm!("fninit");
     }
+
+    // @TODO: GDT
+    idt::init_idt();
 }
