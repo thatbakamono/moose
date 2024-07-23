@@ -79,7 +79,7 @@ unsafe extern "C" fn _start() -> ! {
     assert!(STACK_SIZE_REQUEST.get_response().is_some());
 
     Efer::write(Efer::read() | EferFlags::NO_EXECUTE_ENABLE);
-    Cr4::write(Cr4::read() | Cr4Flags::PAGE_GLOBAL | Cr4Flags::PCID | Cr4Flags::FSGSBASE);
+    Cr4::write(Cr4::read() | Cr4Flags::PAGE_GLOBAL | Cr4Flags::FSGSBASE);
 
     arch::x86::perform_arch_initialization();
 

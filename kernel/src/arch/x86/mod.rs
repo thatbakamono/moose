@@ -1,3 +1,5 @@
+use x86_64::registers::control::{Cr4, Cr4Flags};
+
 pub mod asm;
 pub mod idt;
 
@@ -20,4 +22,8 @@ pub fn perform_arch_initialization() {
 
     // @TODO: GDT
     idt::init_idt();
+
+    unsafe {
+        Cr4::write(Cr4::read() | Cr4Flags::PCID);
+    }
 }
