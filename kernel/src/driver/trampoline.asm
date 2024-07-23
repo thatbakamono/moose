@@ -57,12 +57,12 @@ startup_ap:
     mov cr0, ebx
 
     ; far jump to enable Long Mode and load CS with the first entry of GDT
-    jmp 0b01000:long_mode_ap
+    jmp 0b101000:long_mode_ap
 
 USE64
 long_mode_ap:
     ; Reload segment registers to the second entry of GDT
-    mov ax, 0b10000
+    mov ax, 0b110000
     mov ds, ax
     mov es, ax
     mov fs, ax
@@ -148,6 +148,18 @@ gdt:
 .null equ $ - gdt
     dq 0
 
+.unused1 equ $ - gdt
+    dq 0
+
+.unused2 equ $ - gdt
+    dq 0
+
+.unused3 equ $ - gdt
+    dq 0
+
+.unused4 equ $ - gdt
+    dq 0
+
 .kernel_code equ $ - gdt
 istruc GDTEntry
     at GDTEntry.limitl, dw 0
@@ -165,6 +177,27 @@ istruc GDTEntry
     at GDTEntry.basem, db 0
 ; AMD System Programming Manual states that the writeable bit is ignored in long mode, but ss can not be set to this descriptor without it
     at GDTEntry.attribute, db attrib.present | attrib.user | attrib.writable | attrib.accessed
+    at GDTEntry.flags__limith, db 0
+    at GDTEntry.baseh, db 0
+iend
+
+.user_code equ $ - gdt
+istruc GDTEntry
+    at GDTEntry.limitl, dw 0
+    at GDTEntry.basel, dw 0
+    at GDTEntry.basem, db 0
+    at GDTEntry.attribute, db attrib.present | attrib.user | attrib.ring3 | attrib.readable | attrib.code | attrib.accessed
+    at GDTEntry.flags__limith, db flags.long_mode
+    at GDTEntry.baseh, db 0
+iend
+
+.user_data equ $ - gdt
+istruc GDTEntry
+    at GDTEntry.limitl, dw 0
+    at GDTEntry.basel, dw 0
+    at GDTEntry.basem, db 0
+; AMD System Programming Manual states that the writeable bit is ignored in long mode, but ss can not be set to this descriptor without it
+    at GDTEntry.attribute, db attrib.present | attrib.user | attrib.ring3 | attrib.writable | attrib.accessed
     at GDTEntry.flags__limith, db 0
     at GDTEntry.baseh, db 0
 iend

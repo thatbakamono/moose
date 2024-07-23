@@ -55,7 +55,7 @@ impl Rtl8139 {
         for frame in frames {
             unsafe {
                 memory_manager
-                    .map_identity(
+                    .map_identity_for_current_address_space(
                         &Page::new(VirtualAddress::new(frame.address().as_u64())),
                         PageFlags::WRITABLE,
                     )
@@ -153,9 +153,9 @@ impl Rtl8139 {
             // Initialize receive buffer (RX)
             let rx_buffer_physical_address = memory_manager()
                 .read()
-                .translate_virtual_address_to_physical(VirtualAddress::new(
-                    rtl8139.rx_buffer as u64,
-                ))
+                .translate_virtual_address_to_physical_for_current_address_space(
+                    VirtualAddress::new(rtl8139.rx_buffer as u64),
+                )
                 .unwrap()
                 .as_u64();
 
@@ -199,7 +199,7 @@ impl Rtl8139 {
 
         // Create buffer and copy user delivered data to it.
         //
-        // It's needed mostly because we need to be aligned at the page boundary, 
+        // It's needed mostly because we need to be aligned at the page boundary,
         // the data can't be on two, not physically contiguous, page frames.
         let mut tx_buffer = Box::new(TxBuffer([0u8; 1518]));
         tx_buffer.as_mut().0[0..data.len()].copy_from_slice(data);
@@ -208,7 +208,7 @@ impl Rtl8139 {
         let tx_buffer_virtual_address = &mut *tx_buffer as *mut TxBuffer;
         let tx_buffer_phys_address = memory_manager()
             .read()
-            .translate_virtual_address_to_physical(VirtualAddress::new(
+            .translate_virtual_address_to_physical_for_current_address_space(VirtualAddress::new(
                 tx_buffer_virtual_address.addr() as u64,
             ))
             .unwrap()

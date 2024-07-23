@@ -6,6 +6,7 @@ pub use io_apic::*;
 pub use local_apic::*;
 
 use crate::arch::x86::idt::register_interrupt_handler;
+use crate::cpu::MAXIMUM_CPU_CORES;
 use crate::driver::acpi::{Acpi, MadtEntryInner};
 use crate::driver::pit::PIT;
 use crate::kernel::Kernel;
@@ -16,7 +17,7 @@ use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::arch::asm;
 use core::ptr;
-use log::debug;
+use log::{debug, warn};
 use raw_cpuid::CpuId;
 use spin::RwLock;
 use x86_64::instructions::interrupts::without_interrupts;
@@ -86,7 +87,7 @@ impl Apic {
             let mut memory_manager = memory_manager().write();
 
             memory_manager
-                .map_identity(
+                .map_identity_for_current_address_space(
                     &Page::new(VirtualAddress::new(0x8000)),
                     PageFlags::WRITABLE | PageFlags::EXECUTABLE,
                 )
@@ -122,6 +123,27 @@ impl Apic {
             .get_feature_info()
             .unwrap()
             .initial_local_apic_id() as u16;
+
+        let cpu_core_count = self
+            .acpi
+            .madt
+            .entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.inner,
+                    MadtEntryInner::ProcessorLocalApic(_local_apic)
+                )
+            })
+            .count();
+
+        if cpu_core_count > MAXIMUM_CPU_CORES {
+            warn!(
+                "Found more CPU cores ({}) than the OS can handle ({})",
+                cpu_core_count, MAXIMUM_CPU_CORES
+            );
+        }
+
         self.acpi
             .madt
             .entries
@@ -134,6 +156,7 @@ impl Apic {
                 }
             })
             .filter(|entry| entry.apic_id != bsp_id as u8)
+            .take(MAXIMUM_CPU_CORES - 1)
             .for_each(|entry| {
                 if entry.flags & (1 << 0) == 0 {
                     // Processor is not online-capable, so ignore this entry
@@ -147,7 +170,10 @@ impl Apic {
                 unsafe {
                     // Create 4MiB stack
                     let stack = {
-                        let layout = Layout::array::<u8>(STACK_SIZE).unwrap();
+                        let layout = Layout::array::<u8>(STACK_SIZE)
+                            .unwrap()
+                            .align_to(4096)
+                            .unwrap();
 
                         alloc_zeroed(layout)
                     };

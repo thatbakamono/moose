@@ -43,79 +43,110 @@ impl MemoryManager {
         self.frame_allocator.allocate()
     }
 
-    pub unsafe fn map(
+    pub unsafe fn map_for_current_address_space(
         &mut self,
         page: &Page,
         frame: &Frame,
         page_flags: PageFlags,
     ) -> Result<(), MemoryError> {
-        self.map_inner(page, frame, page_flags)
+        self.map(
+            current_page_table(self.physical_memory_offset),
+            page,
+            frame,
+            page_flags,
+        )
     }
 
-    pub unsafe fn map_temporary(
+    pub unsafe fn map(
+        &mut self,
+        page_table: *mut PageTable,
+        page: &Page,
+        frame: &Frame,
+        page_flags: PageFlags,
+    ) -> Result<(), MemoryError> {
+        self.map_inner(page_table, page, frame, page_flags)
+    }
+
+    pub unsafe fn map_temporary_for_current_address_space(
         &mut self,
         page: &Page,
         frame: &Frame,
         page_flags: PageFlags,
         f: impl FnOnce(),
     ) -> Result<(), MemoryError> {
-        self.map(page, frame, page_flags)?;
+        self.map_for_current_address_space(page, frame, page_flags)?;
 
         f();
 
-        self.unmap(page)
+        self.unmap_for_current_address_space(page)
     }
 
-    pub unsafe fn map_identity(
+    pub unsafe fn map_identity_for_current_address_space(
         &mut self,
         page: &Page,
         page_flags: PageFlags,
     ) -> Result<(), MemoryError> {
-        self.map(
+        self.map_for_current_address_space(
             page,
             &Frame::new(PhysicalAddress::new(page.address().as_u64())),
             page_flags,
         )
     }
 
-    pub unsafe fn map_identity_temporary(
+    pub unsafe fn map_identity_temporary_for_current_address_space(
         &mut self,
         page: &Page,
         page_flags: PageFlags,
         f: impl FnOnce(),
     ) -> Result<(), MemoryError> {
-        self.map_identity(page, page_flags)?;
+        self.map_identity_for_current_address_space(page, page_flags)?;
 
         f();
 
-        self.unmap(page)
+        self.unmap_for_current_address_space(page)
     }
 
-    pub unsafe fn map_any(&mut self, frame: &Frame, page_flags: PageFlags) -> Page {
-        self.map_any_inner(frame, page_flags)
+    pub unsafe fn map_any_for_current_address_space(
+        &mut self,
+        frame: &Frame,
+        page_flags: PageFlags,
+    ) -> Page {
+        self.map_any_inner(
+            current_page_table(self.physical_memory_offset),
+            frame,
+            page_flags,
+        )
     }
 
-    pub unsafe fn map_any_temporary(
+    pub unsafe fn map_any_temporary_for_current_address_space(
         &mut self,
         frame: &Frame,
         page_flags: PageFlags,
         f: impl FnOnce(Page),
     ) -> Result<(), MemoryError> {
-        let page = self.map_any(frame, page_flags);
+        let page = self.map_any_for_current_address_space(frame, page_flags);
 
         f(page);
 
-        self.unmap(&page)
+        self.unmap_for_current_address_space(&page)
     }
 
-    pub unsafe fn unmap(&self, page: &Page) -> Result<(), MemoryError> {
-        self.unmap_inner(page)
+    pub unsafe fn unmap_for_current_address_space(&self, page: &Page) -> Result<(), MemoryError> {
+        self.unmap_inner(current_page_table(self.physical_memory_offset), page)
     }
 
-    pub fn translate_virtual_address_to_physical(
+    pub unsafe fn unmap(&self, page_table: *mut PageTable, page: &Page) -> Result<(), MemoryError> {
+        self.unmap_inner(page_table, page)
+    }
+
+    pub fn translate_virtual_address_to_physical_for_current_address_space(
         &self,
         address: VirtualAddress,
     ) -> Option<PhysicalAddress> {
+        if address.as_u64() > (1 << 48) {
+            return None;
+        }
+
         // | 63 | ... | 49 | 48 | ... | 40 | 39 | ... | 31 | 30 | ... | 22 | 21 | ... | 12 | 11 | ... | 0 |
         // | Unused        | Page level 4  | Page level 3  | Page level 2  | Page level 1  | 4 KiB offset |
         let offset = address.as_u64() & 0b1111_1111_1111;
@@ -194,11 +225,14 @@ impl MemoryManager {
 
     fn map_inner(
         &mut self,
+        level_4_page_table: *mut PageTable,
         page: &Page,
         frame: &Frame,
         page_flags: PageFlags,
     ) -> Result<(), MemoryError> {
         let address = page.address();
+
+        assert!(address.as_u64() < (1 << 48));
 
         // | 63 | ... | 49 | 48 | ... | 40 | 39 | ... | 31 | 30 | ... | 22 | 21 | ... | 12 | 11 | ... | 0 |
         // | Unused        | Page level 4  | Page level 3  | Page level 2  | Page level 1  | 4 KiB offset |
@@ -210,7 +244,6 @@ impl MemoryManager {
 
         assert_eq!(offset, 0);
 
-        let level_4_page_table = unsafe { current_page_table(self.physical_memory_offset) };
         let level_4_page_table_entry =
             &mut unsafe { &mut *level_4_page_table }[level_4_page_table_entry_index];
 
@@ -302,23 +335,28 @@ impl MemoryManager {
                 .set_flags(level_1_page_table_entry.flags() | PageTableFlags::NO_CACHE);
         }
 
-        // The TLB (translation lookaside buffer) holds results of previous translations and
-        // allows the CPU to skip a lot of additional work in case it was already computed before and
-        // is present in the cache.
-        // Hence, after each page table modification, we need to flush all relevant TLB entries.
-        // If we didn't, there would be **horrible**, hard to track bugs.
-        //
-        // TODO: TLB misses are really inefficient, thus flushing the entire TLB is non optimal.
-        //       Optimizing this at the moment doesn't make much sense,
-        //       but it needs to be done in the future.
-        tlb::flush_all();
+        if level_4_page_table == unsafe { current_page_table(self.physical_memory_offset) } {
+            // The TLB (translation lookaside buffer) holds results of previous translations and
+            // allows the CPU to skip a lot of additional work in case it was already computed before and
+            // is present in the cache.
+            // Hence, after each page table modification, we need to flush all relevant TLB entries.
+            // If we didn't, there would be **horrible**, hard to track bugs.
+            //
+            // TODO: TLB misses are really inefficient, thus flushing the entire TLB is non optimal.
+            //       Optimizing this at the moment doesn't make much sense,
+            //       but it needs to be done in the future.
+            tlb::flush_all();
+        }
 
         Ok(())
     }
 
-    fn map_any_inner(&mut self, frame: &Frame, page_flags: PageFlags) -> Page {
-        let level_4_page_table = unsafe { current_page_table(self.physical_memory_offset) };
-
+    fn map_any_inner(
+        &mut self,
+        level_4_page_table: *mut PageTable,
+        frame: &Frame,
+        page_flags: PageFlags,
+    ) -> Page {
         for level_4_page_table_entry_index in 0..512 {
             let level_4_page_table_entry =
                 &mut unsafe { &mut *level_4_page_table }[level_4_page_table_entry_index];
@@ -443,10 +481,16 @@ impl MemoryManager {
         panic!("The entire page table is occupied");
     }
 
-    fn unmap_inner(&self, page: &Page) -> Result<(), MemoryError> {
+    fn unmap_inner(
+        &self,
+        level_4_page_table: *mut PageTable,
+        page: &Page,
+    ) -> Result<(), MemoryError> {
         // TODO: Deallocate unused page tables.
 
         let address = page.address();
+
+        assert!(address.as_u64() < (1 << 48));
 
         // | 63 | ... | 49 | 48 | ... | 40 | 39 | ... | 31 | 30 | ... | 22 | 21 | ... | 12 | 11 | ... | 0 |
         // | Unused        | Page level 4  | Page level 3  | Page level 2  | Page level 1  | 4 KiB offset |
@@ -458,7 +502,6 @@ impl MemoryManager {
 
         assert_eq!(offset, 0);
 
-        let level_4_page_table = unsafe { current_page_table(self.physical_memory_offset) };
         let level_4_page_table_entry =
             &mut unsafe { &mut *level_4_page_table }[level_4_page_table_entry_index];
 
@@ -524,16 +567,18 @@ impl MemoryManager {
         level_1_page_table_entry.set_address(PhysicalAddress::new(0));
         level_1_page_table_entry.set_flags(PageTableFlags::empty());
 
-        // The TLB (translation lookaside buffer) holds results of previous translations and
-        // allows the CPU to skip a lot of additional work in case it was already computed before and
-        // is present in the cache.
-        // Hence, after each page table modification, we need to flush all relevant TLB entries.
-        // If we didn't, there would be **horrible**, hard to track bugs.
-        //
-        // TODO: TLB misses are really inefficient, thus flushing the entire TLB is non optimal.
-        //       Optimizing this at the moment doesn't make much sense,
-        //       but it needs to be done in the future.
-        tlb::flush_all();
+        if level_4_page_table == unsafe { current_page_table(self.physical_memory_offset) } {
+            // The TLB (translation lookaside buffer) holds results of previous translations and
+            // allows the CPU to skip a lot of additional work in case it was already computed before and
+            // is present in the cache.
+            // Hence, after each page table modification, we need to flush all relevant TLB entries.
+            // If we didn't, there would be **horrible**, hard to track bugs.
+            //
+            // TODO: TLB misses are really inefficient, thus flushing the entire TLB is non optimal.
+            //       Optimizing this at the moment doesn't make much sense,
+            //       but it needs to be done in the future.
+            tlb::flush_all();
+        }
 
         Ok(())
     }
@@ -631,7 +676,7 @@ impl IndexMut<usize> for PageTable {
 
 #[derive(Clone, Copy)]
 #[repr(transparent)]
-pub struct PageTableEntry(u64);
+pub struct PageTableEntry(pub(crate) u64);
 
 impl PageTableEntry {
     pub fn new(value: u64) -> Self {
@@ -640,16 +685,19 @@ impl PageTableEntry {
 
     #[inline]
     pub fn address(&self) -> PhysicalAddress {
-        PhysicalAddress(self.0 & 0x000f_ffff_ffff_f000)
+        PhysicalAddress(self.0 & 0xfff_ffff_ffff_f000)
     }
 
     pub fn set_address(&mut self, address: PhysicalAddress) {
+        assert!(address.as_u64() & 0b1111_1111_1111 == 0);
+        assert!(address.as_u64() < (1 << 52));
+
         self.0 = address.as_u64() | self.flags().bits();
     }
 
     #[inline]
     pub fn flags(&self) -> PageTableFlags {
-        PageTableFlags::from_bits_truncate(self.0)
+        PageTableFlags::from_bits_truncate(self.0 & ((1 << 63) | 0b1111_1111_1111))
     }
 
     pub fn set_flags(&mut self, flags: PageTableFlags) {
@@ -686,7 +734,6 @@ bitflags! {
         const HUGE_PAGE = 1 << 7;
         const GLOBAL = 1 << 8;
         const NO_EXECUTE = 1 << 63;
-        const _ = !0;
     }
 }
 
@@ -791,7 +838,6 @@ pub unsafe fn current_page_table(physical_memory_offset: u64) -> *mut PageTable 
 
     let physical_address = level_4_table_frame.start_address();
     let virtual_address = physical_memory_offset + physical_address.as_u64();
-    let page_table_ptr = virtual_address as *mut PageTable;
 
-    page_table_ptr
+    virtual_address as *mut PageTable
 }

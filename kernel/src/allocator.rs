@@ -9,7 +9,7 @@ use linked_list_allocator::Heap;
 use spin::{Mutex, Once};
 
 const HEAP_START: usize = 0x4444_4444_0000;
-const INITIAL_HEAP_SIZE: usize = 4 * 1024 * 1024;
+const INITIAL_HEAP_SIZE: usize = 16 * 1024 * 1024;
 
 #[global_allocator]
 static mut ALLOCATOR: KernelHeapAllocator = KernelHeapAllocator::empty();
@@ -21,7 +21,9 @@ pub fn initialize_heap() -> Result<(), MemoryError> {
         let page = Page::new(VirtualAddress::new((HEAP_START + (i * PAGE_SIZE)) as u64));
         let frame = memory_manager.allocate_frame().expect("Failed to allocate");
 
-        unsafe { memory_manager.map(&page, &frame, PageFlags::WRITABLE)? };
+        unsafe {
+            memory_manager.map_for_current_address_space(&page, &frame, PageFlags::WRITABLE)?
+        };
     }
 
     unsafe {
@@ -91,7 +93,10 @@ unsafe impl GlobalAlloc for KernelHeapAllocator {
                 ));
                 let frame = memory_manager.allocate_frame().expect("Failed to allocate");
 
-                unsafe { memory_manager.map(&page, &frame, PageFlags::WRITABLE) }.unwrap();
+                unsafe {
+                    memory_manager.map_for_current_address_space(&page, &frame, PageFlags::WRITABLE)
+                }
+                .unwrap();
             }
 
             // Tries to allocate additional frames, so there's always a bit of wiggle room. Gives up if it's not possible to do so.
@@ -101,8 +106,13 @@ unsafe impl GlobalAlloc for KernelHeapAllocator {
                 ));
 
                 if let Some(frame) = memory_manager.allocate_frame() {
-                    if unsafe { memory_manager.map(&page, &frame, PageFlags::WRITABLE) }.is_err() {
-                        break;
+                    unsafe {
+                        if memory_manager
+                            .map_for_current_address_space(&page, &frame, PageFlags::WRITABLE)
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
                 } else {
                     break;

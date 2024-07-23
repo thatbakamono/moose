@@ -136,13 +136,15 @@ impl AtaDrive {
         let prd_pointer = &mut *prd as *mut PhysicalRegionDescriptor;
         let prd_physical_address = memory_manager()
             .read()
-            .translate_virtual_address_to_physical(VirtualAddress::new(prd_pointer.addr() as u64))
+            .translate_virtual_address_to_physical_for_current_address_space(VirtualAddress::new(
+                prd_pointer.addr() as u64,
+            ))
             .unwrap()
             .as_u64() as u32;
         let buffer_physical_address = memory_manager()
             .read()
-            .translate_virtual_address_to_physical(VirtualAddress::new(
-                buffer.as_ptr().addr() as u64
+            .translate_virtual_address_to_physical_for_current_address_space(VirtualAddress::new(
+                buffer.as_ptr().addr() as u64,
             ))
             .unwrap()
             .as_u64() as u32;
@@ -240,12 +242,16 @@ impl AtaDrive {
         let prd_pointer = &mut *prd as *mut PhysicalRegionDescriptor;
         let prd_physical_address = memory_manager()
             .read()
-            .translate_virtual_address_to_physical(VirtualAddress::new(prd_pointer.addr() as u64))
+            .translate_virtual_address_to_physical_for_current_address_space(VirtualAddress::new(
+                prd_pointer.addr() as u64,
+            ))
             .unwrap()
             .as_u64() as u32;
         let buffer_physical_address = memory_manager()
             .read()
-            .translate_virtual_address_to_physical(VirtualAddress::new(data.as_ptr().addr() as u64))
+            .translate_virtual_address_to_physical_for_current_address_space(VirtualAddress::new(
+                data.as_ptr().addr() as u64,
+            ))
             .unwrap()
             .as_u64() as u32;
 
