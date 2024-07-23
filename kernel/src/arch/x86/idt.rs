@@ -6,9 +6,10 @@ use x86_64::{
         gdt::SegmentSelector,
         idt::{Entry, InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode},
     },
+    PrivilegeLevel,
 };
 
-use super::use_kernel_page_table;
+use super::{gdt::KERNEL_MODE_CODE_SEGMENT_INDEX, use_kernel_page_table};
 
 pub static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 
@@ -17,6 +18,8 @@ static mut REGISTERED_INTERRUPT_HANDLERS: [Vec<Box<dyn Fn(&InterruptStackFrame)>
 
     [DEFAULT; 224]
 };
+
+const SYSCALL_IRQ: u8 = 0x80;
 
 pub fn init_idt() {
     unsafe {
@@ -285,18 +288,21 @@ pub fn init_idt() {
         IDT[254].set_handler_fn(interrupt_handler::<222>);
         IDT[255].set_handler_fn(interrupt_handler::<223>);
 
-        IDT[0x80] = Entry::missing();
-        IDT[0x80]
+        IDT[SYSCALL_IRQ] = Entry::missing();
+        IDT[SYSCALL_IRQ]
             .set_handler_fn(syscall_handler)
-            .set_code_selector(SegmentSelector::new(5, x86_64::PrivilegeLevel::Ring0))
-            .set_privilege_level(x86_64::PrivilegeLevel::Ring3);
+            .set_code_selector(SegmentSelector::new(
+                KERNEL_MODE_CODE_SEGMENT_INDEX as u16,
+                PrivilegeLevel::Ring0,
+            ))
+            .set_privilege_level(PrivilegeLevel::Ring3);
 
         IDT.load();
     }
 }
 
 pub fn register_interrupt_handler(n: u8, handler: Box<dyn Fn(&InterruptStackFrame)>) {
-    assert!(n != 0x80);
+    assert!(n != SYSCALL_IRQ);
 
     unsafe {
         REGISTERED_INTERRUPT_HANDLERS[n as usize - 32].push(handler);

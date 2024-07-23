@@ -1,4 +1,4 @@
-use crate::arch::x86::gdt::{GDT_DESCRIPTOR, TSSS};
+use crate::arch::x86::gdt::{GDT_DESCRIPTOR, TSS};
 use crate::arch::x86::idt::IDT;
 use crate::arch::x86::use_kernel_page_table;
 use crate::cpu::ProcessorControlBlock;
@@ -84,11 +84,11 @@ pub unsafe extern "C" fn ap_start(apic_processor_id: u64, kernel_ptr: *const RwL
     let interrupt_stack =
         alloc::alloc::alloc_zeroed(Layout::new::<InterruptStack>()) as *mut InterruptStack;
 
-    TSSS[processor_index as usize].rsp0 =
+    TSS[processor_index as usize].rsp0 =
         interrupt_stack as u64 + mem::size_of::<InterruptStack>() as u64 - 16;
-    TSSS[processor_index as usize].rsp1 =
+    TSS[processor_index as usize].rsp1 =
         interrupt_stack as u64 + mem::size_of::<InterruptStack>() as u64 - 16;
-    TSSS[processor_index as usize].rsp2 =
+    TSS[processor_index as usize].rsp2 =
         interrupt_stack as u64 + mem::size_of::<InterruptStack>() as u64 - 16;
 
     asm!(

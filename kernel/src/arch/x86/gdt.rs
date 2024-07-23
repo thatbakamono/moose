@@ -8,24 +8,37 @@ use crate::cpu::MAXIMUM_CPU_CORES;
 pub(crate) static mut GDT_DESCRIPTOR: GlobalDescriptorTableDescriptor =
     GlobalDescriptorTableDescriptor::new(0, 0); // We can't obtain the address of GDT at compile-time, so we have to initialize this in _start
 pub(crate) static mut GDT: GlobalDescriptorTable = GlobalDescriptorTable::new(); // We can't obtain the address of TSS at compile-time, so we have to initialize it in _start
-pub(crate) static mut TSSS: [TaskStateSegment; MAXIMUM_CPU_CORES] = {
-    const DEFAULT: TaskStateSegment = TaskStateSegment::new(
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        mem::size_of::<TaskStateSegment>() as u16,
-    ); // We have to allocate stacks first, thus we need to initialize rsps in _start
+pub(crate) static mut TSS: [TaskStateSegment; MAXIMUM_CPU_CORES] = {
+    const DEFAULT: TaskStateSegment = TaskStateSegment {
+        reserved1: 0,
+        rsp0: 0,
+        rsp1: 0,
+        rsp2: 0,
+        reserved2: 0,
+        reserved3: 0,
+        ist1: 0,
+        ist2: 0,
+        ist3: 0,
+        ist4: 0,
+        ist5: 0,
+        ist6: 0,
+        ist7: 0,
+        reserved4: 0,
+        reserved5: 0,
+        reserved6: 0,
+        iopb: mem::size_of::<TaskStateSegment>() as u16,
+    }; // We have to allocate stacks first, thus we need to initialize rsps in _start
 
     [DEFAULT; MAXIMUM_CPU_CORES]
 };
 
+pub(crate) const KERNEL_MODE_CODE_SEGMENT_INDEX: usize = 5;
+pub(crate) const KERNEL_MODE_DATA_SEGMENT_INDEX: usize = 6;
+pub(crate) const USER_MODE_CODE_SEGMENT_INDEX: usize = 7;
+pub(crate) const USER_MODE_DATA_SEGMENT_INDEX: usize = 8;
+pub(crate) const TSS_INDEX: usize = 9;
+
+// See Intel Manuals Combined, Volume C, 3.5.1, p. 3087, Fig. 3-11 for details
 #[repr(C, packed)]
 pub(crate) struct GlobalDescriptorTableDescriptor {
     pub(crate) size: u16,
@@ -113,6 +126,7 @@ impl GlobalDescriptorTable {
     }
 }
 
+// See Intel Manuals Combined, Volume C, 8.2.3, p. 3250, Fig. 8-4 for details
 #[derive(Clone, Copy, Default)]
 #[repr(C, packed)]
 pub(crate) struct SegmentDescriptor {
@@ -170,6 +184,7 @@ impl SegmentDescriptor {
     }
 }
 
+// See Intel Manuals Combined, Volume C, 3.4.5, p. 3081 for details
 #[bitfield(u8)]
 pub(crate) struct SegmentDescriptorAttributes {
     pub(crate) accessed: bool,
@@ -182,6 +197,7 @@ pub(crate) struct SegmentDescriptorAttributes {
     pub(crate) present: bool,
 }
 
+// See Intel Manuals Combined, Volume C, 8.2.3, p. 3250, Fig. 8-4 for details
 #[repr(C, packed)]
 pub(crate) struct SystemSegmentDescriptor {
     pub(crate) limit_low: u16,
@@ -244,6 +260,7 @@ impl SystemSegmentDescriptor {
     }
 }
 
+// // See Intel Manuals Combined, Volume C, 3.4.5, p. 3081 for details
 #[bitfield(u8)]
 pub(crate) struct SystemSegmentDescriptorAttributes {
     #[bits(4, default =  SystemSegmentType::LocalDescriptorTable)]
@@ -254,6 +271,7 @@ pub(crate) struct SystemSegmentDescriptorAttributes {
     pub(crate) present: bool,
 }
 
+// See Intel Manuals Combined, Volume B, p. 1208, Table 3-66 for details
 #[derive(Debug)]
 pub(crate) enum SystemSegmentType {
     LocalDescriptorTable,
@@ -290,6 +308,7 @@ bitflags! {
     }
 }
 
+// See Intel Manuals Combined, Volume C, 8.7, p. 3263, Fig. 8-11 for details
 #[repr(C, packed)]
 pub(crate) struct TaskStateSegment {
     pub(crate) reserved1: u32,
@@ -309,40 +328,4 @@ pub(crate) struct TaskStateSegment {
     pub(crate) reserved5: u32,
     pub(crate) reserved6: u16,
     pub(crate) iopb: u16,
-}
-
-impl TaskStateSegment {
-    pub(crate) const fn new(
-        rsp0: u64,
-        rsp1: u64,
-        rsp2: u64,
-        ist1: u64,
-        ist2: u64,
-        ist3: u64,
-        ist4: u64,
-        ist5: u64,
-        ist6: u64,
-        ist7: u64,
-        iopb: u16,
-    ) -> Self {
-        Self {
-            reserved1: 0,
-            rsp0,
-            rsp1,
-            rsp2,
-            reserved2: 0,
-            reserved3: 0,
-            ist1,
-            ist2,
-            ist3,
-            ist4,
-            ist5,
-            ist6,
-            ist7,
-            reserved4: 0,
-            reserved5: 0,
-            reserved6: 0,
-            iopb,
-        }
-    }
 }

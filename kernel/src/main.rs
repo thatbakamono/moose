@@ -4,6 +4,7 @@
 #![feature(strict_provenance)]
 #![feature(const_size_of_val)]
 #![feature(naked_functions)]
+#![feature(asm_const)]
 #![no_std]
 #![no_main]
 
@@ -32,7 +33,8 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use arch::x86::gdt::{
     GlobalDescriptorTableDescriptor, SegmentFlags, SystemSegmentDescriptor,
-    SystemSegmentDescriptorAttributes, SystemSegmentType, GDT, GDT_DESCRIPTOR, TSSS,
+    SystemSegmentDescriptorAttributes, SystemSegmentType, GDT, GDT_DESCRIPTOR, TSS, TSS_INDEX,
+    USER_MODE_CODE_SEGMENT_INDEX, USER_MODE_DATA_SEGMENT_INDEX,
 };
 use core::alloc::Layout;
 use core::arch::asm;
@@ -46,7 +48,7 @@ use limine::request::{
 };
 use limine::BaseRevision;
 use log::{error, info};
-use memory::Frame;
+use memory::{Frame, PAGE_SIZE};
 use raw_cpuid::CpuId;
 use spin::{Mutex, RwLock};
 use x86_64::instructions::tlb;
@@ -115,7 +117,7 @@ unsafe extern "C" fn _start() -> ! {
     {
         for (index, tss_segment) in GDT.tss_segments.iter_mut().enumerate() {
             *tss_segment = SystemSegmentDescriptor::new(
-                addr_of!(TSSS) as u64 + (index * mem::size_of::<TaskStateSegment>()) as u64,
+                addr_of!(TSS) as u64 + (index * mem::size_of::<TaskStateSegment>()) as u64,
                 mem::size_of::<TaskStateSegment>() as u32,
                 SystemSegmentDescriptorAttributes::new()
                     .with_present(true)
@@ -172,22 +174,18 @@ unsafe extern "C" fn _start() -> ! {
     let interrupt_stack =
         alloc::alloc::alloc_zeroed(Layout::new::<InterruptStack>()) as *mut InterruptStack;
 
-    TSSS[0].rsp0 = interrupt_stack as u64 + mem::size_of::<InterruptStack>() as u64 - 16;
-    TSSS[0].rsp1 = interrupt_stack as u64 + mem::size_of::<InterruptStack>() as u64 - 16;
-    TSSS[0].rsp2 = interrupt_stack as u64 + mem::size_of::<InterruptStack>() as u64 - 16;
+    TSS[0].rsp0 = interrupt_stack as u64 + mem::size_of::<InterruptStack>() as u64 - 16;
+    TSS[0].rsp1 = interrupt_stack as u64 + mem::size_of::<InterruptStack>() as u64 - 16;
+    TSS[0].rsp2 = interrupt_stack as u64 + mem::size_of::<InterruptStack>() as u64 - 16;
 
-    {
-        asm!(
-            "
-                push rax
-                mov ax, (9 << 3) | 3
-                ltr ax
-                pop rax
-            "
-        );
-
-        asm!("sti", options(nostack, nomem));
-    }
+    asm!(
+        "
+            ltr {segment:x}
+            sti
+        ",
+        segment = in(reg_abcd) ((TSS_INDEX << 3) | 3) as u16,
+        options(nostack, nomem)
+    );
 
     PIC.initialize();
     PIT.initialize();
@@ -259,7 +257,7 @@ pub fn start_program(
 
     let program_frame = memory_manager.allocate_frame().unwrap();
 
-    let stack = unsafe { alloc::alloc::alloc_zeroed(Layout::new::<Stack>()) };
+    let stack = unsafe { alloc::alloc::alloc_zeroed(Layout::new::<ThreadStack>()) };
 
     // temporarily map frame in kernel's address space, so we can write there
     unsafe {
@@ -320,7 +318,7 @@ pub fn start_program(
     }
 
     // remap interrupt's stack in program's address space
-    for page_index in 0..4 {
+    for page_index in 0..(mem::size_of::<InterruptStack>() / PAGE_SIZE) as u64 {
         let interrupt_stack_virtual_address =
             VirtualAddress::new(interrupt_stack as u64 + (page_index * 4096));
         let interrupt_stack_physical_address = memory_manager
@@ -359,7 +357,7 @@ pub fn start_program(
     };
 
     // map program's stack in program's address space
-    for page_index in 0..4 {
+    for page_index in 0..(mem::size_of::<ThreadStack>() / PAGE_SIZE) as u64 {
         let stack_virtual_address = VirtualAddress::new(stack as u64 + (page_index * 4096));
         let stack_physical_address = memory_manager
             .translate_virtual_address_to_physical_for_current_address_space(stack_virtual_address)
@@ -404,7 +402,7 @@ pub fn start_program(
     drop(memory_manager);
 
     enter_user_mode(0xDEA_DBEE_F000 as *const _, unsafe {
-        stack.add(mem::size_of::<Stack>()).offset(-16)
+        stack.add(mem::size_of::<ThreadStack>()).offset(-16)
     });
 }
 
@@ -414,9 +412,9 @@ pub struct InterruptStack([u8; 16 * 1024]);
 
 #[repr(C)]
 #[repr(align(4096))]
-struct Stack([u8; 16 * 1024]);
+struct ThreadStack([u8; 16 * 1024]);
 
-impl Stack {
+impl ThreadStack {
     fn new() -> Self {
         Self([0; 16 * 1024])
     }
@@ -426,18 +424,20 @@ extern "C" fn enter_user_mode(program: *const u8, stack: *const u8) -> ! {
     unsafe {
         asm!(
             "
-                mov ds, {data_segment:r}
-                mov es, {data_segment:r}
-                push (8 << 3) | 3
+                mov ds, {data_segment_index_reg:r}
+                mov es, {data_segment_index_reg:r}
+                push ({data_segment_index} << 3) | 3
                 push {stack}
                 pushf
-                push (7 << 3) | 3
+                push ({code_segment_index} << 3) | 3
                 push {program}
                 iretq
             ",
-            data_segment = in(reg) (8 << 3) | 3,
             program = in(reg) program,
             stack = in(reg) stack,
+            code_segment_index = const(USER_MODE_CODE_SEGMENT_INDEX as u8),
+            data_segment_index = const(USER_MODE_DATA_SEGMENT_INDEX as u8),
+            data_segment_index_reg = in(reg) (USER_MODE_DATA_SEGMENT_INDEX << 3) | 3,
             options(nomem, noreturn)
         );
     };
