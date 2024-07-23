@@ -106,16 +106,13 @@ unsafe impl GlobalAlloc for KernelHeapAllocator {
                 ));
 
                 if let Some(frame) = memory_manager.allocate_frame() {
-                    if unsafe {
-                        memory_manager.map_for_current_address_space(
-                            &page,
-                            &frame,
-                            PageFlags::WRITABLE,
-                        )
-                    }
-                    .is_err()
-                    {
-                        break;
+                    unsafe {
+                        if memory_manager
+                            .map_for_current_address_space(&page, &frame, PageFlags::WRITABLE)
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
                 } else {
                     break;

@@ -17,7 +17,7 @@ use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::arch::asm;
 use core::ptr;
-use log::debug;
+use log::{debug, warn};
 use raw_cpuid::CpuId;
 use spin::RwLock;
 use x86_64::instructions::interrupts::without_interrupts;
@@ -123,6 +123,27 @@ impl Apic {
             .get_feature_info()
             .unwrap()
             .initial_local_apic_id() as u16;
+
+        let cpu_core_count = self
+            .acpi
+            .madt
+            .entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.inner,
+                    MadtEntryInner::ProcessorLocalApic(_local_apic)
+                )
+            })
+            .count();
+
+        if cpu_core_count > MAXIMUM_CPU_CORES {
+            warn!(
+                "Found more CPU cores ({}) than the OS can handle ({})",
+                cpu_core_count, MAXIMUM_CPU_CORES
+            );
+        }
+
         self.acpi
             .madt
             .entries

@@ -62,11 +62,12 @@ pub unsafe extern "C" fn ap_start(apic_processor_id: u64, kernel_ptr: *const RwL
     IDT.load();
     Cr4::write(Cr4::read() | Cr4Flags::FSGSBASE);
 
-    asm!("cli", options(nomem, nostack));
-
     asm!(
-        "lgdt [{gdt}]",
-        options(nomem, nostack, preserves_flags),
+        "
+            cli
+            lgdt [{gdt}]
+        ",
+        options(nomem, nostack),
         gdt = in(reg) addr_of!(GDT_DESCRIPTOR) as u64,
     );
 
