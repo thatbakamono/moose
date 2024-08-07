@@ -246,9 +246,9 @@ impl AtaDrive {
         buffer
     }
 
-    pub fn write_sectors(&self, starting_sector_lba: u32, data: &[Sector]) {
+    pub fn write_sector(&self, starting_sector_lba: u32, data: &Sector) {
         assert!(starting_sector_lba < self.size_in_sectors);
-        assert!((starting_sector_lba + data.len() as u32) < self.size_in_sectors);
+        assert!((starting_sector_lba + ATA_SECTOR_SIZE) < self.size_in_sectors);
 
         // Need to hold this lock until DMA transfer completes because ATA is not thread safe
         let device_lock = self.pci_device.lock();
@@ -272,7 +272,7 @@ impl AtaDrive {
         let mut prd = Box::new(PhysicalRegionDescriptor {
             // We'll fill it later
             buffer_physical_address: 0,
-            transfer_size: (data.len() as u32 * ATA_SECTOR_SIZE) as u16,
+            transfer_size: ATA_SECTOR_SIZE as u16,
             mark_end: ATA_PRD_MARK_END,
         });
 
@@ -308,7 +308,7 @@ impl AtaDrive {
         outl(bmr_prdt_register, prd_physical_address);
 
         // Set sector count and LBA
-        outb(self.get_io_base() + ATA_REG_SECCOUNT0, data.len() as u8);
+        outb(self.get_io_base() + ATA_REG_SECCOUNT0, 1);
         outb(self.get_io_base() + ATA_REG_LBA0, starting_sector_lba as u8);
         outb(
             self.get_io_base() + ATA_REG_LBA1,
