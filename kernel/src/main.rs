@@ -40,7 +40,6 @@ use core::alloc::Layout;
 use core::arch::asm;
 use core::ptr::addr_of;
 use core::{mem, ptr};
-use driver::ata::Ata;
 use driver::net::nic::rtl8139::Rtl8139;
 use limine::paging::Mode;
 use limine::request::{
@@ -48,9 +47,8 @@ use limine::request::{
     RsdpRequest, StackSizeRequest,
 };
 use limine::BaseRevision;
-use log::{debug, error, info};
+use log::{error, info};
 use memory::{Frame, PAGE_SIZE};
-use pretty_hex::simple_hex;
 use raw_cpuid::CpuId;
 use spin::{Mutex, RwLock};
 use x86_64::instructions::tlb;
