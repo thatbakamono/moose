@@ -43,6 +43,20 @@ impl MemoryManager {
         self.frame_allocator.allocate()
     }
 
+    pub fn allocate_frames_contiguous(&mut self, n: usize) -> Option<Frame> {
+        // Memory manager is behind RwLock, allocating frames requires write access, and frame
+        // allocator uses bump allocator internally, so it's safe to do allocations in loop and
+        // they have to be contiguous.
+
+        let first_frame = self.allocate_frame();
+
+        for _ in 1..n {
+            self.allocate_frame();
+        }
+
+        first_frame
+    }
+
     pub unsafe fn map_for_current_address_space(
         &mut self,
         page: &Page,
