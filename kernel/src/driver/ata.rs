@@ -1,6 +1,6 @@
 use crate::arch::x86::asm::{inb, inw, outb, outl};
 use crate::driver::pci::PciDevice;
-use crate::memory::{memory_manager, VirtualAddress};
+use crate::memory::{memory_manager, Page, PageFlags, VirtualAddress, PAGE_SIZE};
 use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -8,8 +8,10 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use core::mem::transmute;
+use core::slice;
 use deku::bitvec::{BitSlice, Msb0};
 use deku::{DekuError, DekuRead};
+use libm::ceil;
 use log::debug;
 use spin::Mutex;
 
@@ -102,8 +104,15 @@ impl AtaDrive {
         assert!(starting_sector_lba < self.size_in_sectors);
         assert!(starting_sector_lba + n < self.size_in_sectors);
 
+        let disk_sectors = n;
+        let sectors_in_frame = PAGE_SIZE / ATA_SECTOR_SIZE as usize;
+        let frames_needed = ceil(n as f64 / sectors_in_frame as f64) as usize;
+
         // Need to hold this lock until DMA transfer completes because ATA is not thread safe
         let device_lock = self.pci_device.lock();
+
+        // Memory manager is used in many places, so acquire lock one time and reuse it
+        let mut memory_manager_lock = memory_manager().write();
 
         // Get BMR command register from PCI configuration space BAR4
         let mut bmr_command_register = device_lock.get_bar(4) as u16;
@@ -122,7 +131,32 @@ impl AtaDrive {
         let bmr_prdt_register = bmr_command_register + 4;
 
         // Allocate data buffer
-        let buffer: Vec<Sector> = vec![[0u8; ATA_SECTOR_SIZE as usize]; n as usize];
+        let mut buffer: Vec<Sector> = vec![[0u8; ATA_SECTOR_SIZE as usize]; disk_sectors as usize];
+
+        // Allocate contiguous page frames for DMA
+        //
+        // @FIXME: This causes memory leak, cause currently there's no way to free allocated page
+        // frame (we use bump allocator under the hood). Fix it as soon as possible.
+        let frames = memory_manager_lock
+            .allocate_frames_contiguous(frames_needed as usize)
+            .unwrap();
+
+        // Map identity each frame
+        for i in 0..frames_needed {
+            unsafe {
+                memory_manager_lock
+                    .map_identity_for_current_address_space(
+                        &Page::new(VirtualAddress::new(
+                            frames.address().as_u64() + i as u64 * PAGE_SIZE as u64,
+                        )),
+                        PageFlags::DISABLE_CACHING,
+                    )
+                    .unwrap()
+            }
+        }
+
+        // Downgrade the write lock to read lock, cause we dont need it anymore
+        let memory_manager_lock = memory_manager_lock.downgrade();
 
         // Allocate Physical Region Descriptor for data transfer
         let mut prd = Box::new(PhysicalRegionDescriptor {
@@ -134,22 +168,15 @@ impl AtaDrive {
 
         // Convert virtual addresses to physical addresses
         let prd_pointer = &mut *prd as *mut PhysicalRegionDescriptor;
-        let prd_physical_address = memory_manager()
-            .read()
+        let prd_physical_address = memory_manager_lock
             .translate_virtual_address_to_physical_for_current_address_space(VirtualAddress::new(
                 prd_pointer.addr() as u64,
             ))
             .unwrap()
             .as_u64() as u32;
-        let buffer_physical_address = memory_manager()
-            .read()
-            .translate_virtual_address_to_physical_for_current_address_space(VirtualAddress::new(
-                buffer.as_ptr().addr() as u64,
-            ))
-            .unwrap()
-            .as_u64() as u32;
 
-        prd.buffer_physical_address = buffer_physical_address;
+        // It's identity mapped
+        prd.buffer_physical_address = frames.address().as_u64() as u32;
 
         // Select drive
         //
@@ -205,12 +232,23 @@ impl AtaDrive {
             }
         }
 
+        // Copy data from DMA space to heap-allocated and Rust-managed Vec<Sector>.
+        // Without this copy Rust would call free() on Vector and fail, because it's not allocated
+        // with our allocator.
+        let slice: &[Sector] = unsafe {
+            slice::from_raw_parts(
+                frames.address().as_u64() as *const Sector,
+                disk_sectors as usize,
+            )
+        };
+        buffer.copy_from_slice(slice);
+
         buffer
     }
 
-    pub fn write_sectors(&self, starting_sector_lba: u32, data: &[Sector]) {
+    pub fn write_sector(&self, starting_sector_lba: u32, data: &Sector) {
         assert!(starting_sector_lba < self.size_in_sectors);
-        assert!((starting_sector_lba + data.len() as u32) < self.size_in_sectors);
+        assert!((starting_sector_lba + ATA_SECTOR_SIZE) < self.size_in_sectors);
 
         // Need to hold this lock until DMA transfer completes because ATA is not thread safe
         let device_lock = self.pci_device.lock();
@@ -234,7 +272,7 @@ impl AtaDrive {
         let mut prd = Box::new(PhysicalRegionDescriptor {
             // We'll fill it later
             buffer_physical_address: 0,
-            transfer_size: (data.len() as u32 * ATA_SECTOR_SIZE) as u16,
+            transfer_size: ATA_SECTOR_SIZE as u16,
             mark_end: ATA_PRD_MARK_END,
         });
 
@@ -270,7 +308,7 @@ impl AtaDrive {
         outl(bmr_prdt_register, prd_physical_address);
 
         // Set sector count and LBA
-        outb(self.get_io_base() + ATA_REG_SECCOUNT0, data.len() as u8);
+        outb(self.get_io_base() + ATA_REG_SECCOUNT0, 1);
         outb(self.get_io_base() + ATA_REG_LBA0, starting_sector_lba as u8);
         outb(
             self.get_io_base() + ATA_REG_LBA1,
