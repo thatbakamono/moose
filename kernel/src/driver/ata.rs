@@ -1,12 +1,12 @@
 use crate::arch::x86::asm::{inb, inw, outb, outl};
 use crate::driver::pci::PciDevice;
-use crate::memory::{memory_manager, VirtualAddress};
+use crate::memory::{memory_manager, Page, PageFlags, VirtualAddress, PAGE_SIZE};
 use alloc::borrow::ToOwned;
-use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use alloc::{format, vec};
+use core::cmp::min;
 use core::mem::transmute;
 use deku::bitvec::{BitSlice, Msb0};
 use deku::{DekuError, DekuRead};
@@ -83,6 +83,7 @@ const ATA_CMD_IDENTIFY: u8 = 0xEC;
 
 pub type Sector = [u8; ATA_SECTOR_SIZE as usize];
 
+#[derive(Clone, Copy, Debug, Default)]
 #[repr(C, packed)]
 struct PhysicalRegionDescriptor {
     buffer_physical_address: u32,
@@ -95,6 +96,7 @@ pub struct AtaDrive {
     drive: u8,
     pci_device: Arc<Mutex<PciDevice>>,
     size_in_sectors: u32,
+    prdt_page: u64,
 }
 
 impl AtaDrive {
@@ -123,33 +125,10 @@ impl AtaDrive {
 
         // Allocate data buffer
         let buffer: Vec<Sector> = vec![[0u8; ATA_SECTOR_SIZE as usize]; n as usize];
+        let slice = buffer.as_flattened();
 
-        // Allocate Physical Region Descriptor for data transfer
-        let mut prd = Box::new(PhysicalRegionDescriptor {
-            // We'll fill it later
-            buffer_physical_address: 0,
-            transfer_size: (n * ATA_SECTOR_SIZE) as u16,
-            mark_end: ATA_PRD_MARK_END,
-        });
-
-        // Convert virtual addresses to physical addresses
-        let prd_pointer = &mut *prd as *mut PhysicalRegionDescriptor;
-        let prd_physical_address = memory_manager()
-            .read()
-            .translate_virtual_address_to_physical_for_current_address_space(VirtualAddress::new(
-                prd_pointer.addr() as u64,
-            ))
-            .unwrap()
-            .as_u64() as u32;
-        let buffer_physical_address = memory_manager()
-            .read()
-            .translate_virtual_address_to_physical_for_current_address_space(VirtualAddress::new(
-                buffer.as_ptr().addr() as u64,
-            ))
-            .unwrap()
-            .as_u64() as u32;
-
-        prd.buffer_physical_address = buffer_physical_address;
+        // Prepare PhysicalRegionDescriptor Table
+        self.prepare_prdt(n as usize, slice);
 
         // Select drive
         //
@@ -164,8 +143,8 @@ impl AtaDrive {
         // This is weird register, because we clear bits by issuing write with these bits set.
         outb(bmr_status_register, inb(bmr_status_register) | 0x2 | 0x4);
 
-        // Set PRDT entry
-        outl(bmr_prdt_register, prd_physical_address);
+        // Set PRDT entry (it's identity mapped)
+        outl(bmr_prdt_register, self.prdt_page as u32);
 
         // Set DMA in read mode
         outb(bmr_command_register, 0x8);
@@ -208,9 +187,9 @@ impl AtaDrive {
         buffer
     }
 
-    pub fn write_sectors(&self, starting_sector_lba: u32, data: &[Sector]) {
+    pub fn write_sector(&self, starting_sector_lba: u32, data: &Sector) {
         assert!(starting_sector_lba < self.size_in_sectors);
-        assert!((starting_sector_lba + data.len() as u32) < self.size_in_sectors);
+        assert!((starting_sector_lba + ATA_SECTOR_SIZE) < self.size_in_sectors);
 
         // Need to hold this lock until DMA transfer completes because ATA is not thread safe
         let device_lock = self.pci_device.lock();
@@ -230,32 +209,8 @@ impl AtaDrive {
 
         let bmr_prdt_register = bmr_command_register + 4;
 
-        // Allocate Physical Region Descriptor for data transfer
-        let mut prd = Box::new(PhysicalRegionDescriptor {
-            // We'll fill it later
-            buffer_physical_address: 0,
-            transfer_size: (data.len() as u32 * ATA_SECTOR_SIZE) as u16,
-            mark_end: ATA_PRD_MARK_END,
-        });
-
-        // Convert virtual addresses to physical addresses
-        let prd_pointer = &mut *prd as *mut PhysicalRegionDescriptor;
-        let prd_physical_address = memory_manager()
-            .read()
-            .translate_virtual_address_to_physical_for_current_address_space(VirtualAddress::new(
-                prd_pointer.addr() as u64,
-            ))
-            .unwrap()
-            .as_u64() as u32;
-        let buffer_physical_address = memory_manager()
-            .read()
-            .translate_virtual_address_to_physical_for_current_address_space(VirtualAddress::new(
-                data.as_ptr().addr() as u64,
-            ))
-            .unwrap()
-            .as_u64() as u32;
-
-        prd.buffer_physical_address = buffer_physical_address;
+        // Prepare PRDT
+        self.prepare_prdt(data.len(), data);
 
         // Select drive
         //
@@ -266,11 +221,11 @@ impl AtaDrive {
         // Reset BMR command register
         outb(bmr_command_register, 0);
 
-        // Set PRDT entry
-        outl(bmr_prdt_register, prd_physical_address);
+        // Set PRDT entry (it's identity mapped)
+        outl(bmr_prdt_register, self.prdt_page as u32);
 
         // Set sector count and LBA
-        outb(self.get_io_base() + ATA_REG_SECCOUNT0, data.len() as u8);
+        outb(self.get_io_base() + ATA_REG_SECCOUNT0, 1);
         outb(self.get_io_base() + ATA_REG_LBA0, starting_sector_lba as u8);
         outb(
             self.get_io_base() + ATA_REG_LBA1,
@@ -295,6 +250,68 @@ impl AtaDrive {
                 break;
             }
         }
+    }
+
+    fn prepare_prdt(&self, sector_count: usize, buffer: &[u8]) {
+        const PRD_SIZE: usize = size_of::<PhysicalRegionDescriptor>();
+
+        // Make sure PRDT will fit in one page frame. This effectively limits ATA reads to 512
+        // sectors, or 256 KiB
+        assert_eq!(PRD_SIZE, 8);
+        assert!((sector_count * PRD_SIZE) < PAGE_SIZE);
+
+        let prdt = self.prdt_page as *mut [PhysicalRegionDescriptor; PAGE_SIZE / PRD_SIZE];
+
+        let mut address = buffer.as_ptr().addr();
+        let mut offset_within_page = address & 0xFFF;
+        let mut remaining_length = buffer.len();
+        let mut index = 0;
+
+        loop {
+            // Convert virtual address of buffer to physical address (they don't have to be
+            // contiguous)
+            let physical_address = memory_manager()
+                .read()
+                .translate_virtual_address_to_physical_for_current_address_space(
+                    VirtualAddress::new(address as u64),
+                )
+                .unwrap()
+                .as_u64();
+
+            // PRD allows DMA only to 32-bit physical addresses
+            assert!(physical_address <= u32::MAX as u64);
+
+            // Calculate bytes to transfer as minimum of (remaining bytes in this page) and
+            // (remaining bytes of transfer)
+            let to_transfer = min(remaining_length, PAGE_SIZE - offset_within_page);
+
+            // Fill in PRD
+            let prd = unsafe { &mut (*prdt)[index] as &mut PhysicalRegionDescriptor };
+            *prd = PhysicalRegionDescriptor {
+                buffer_physical_address: physical_address as u32,
+                transfer_size: to_transfer as u16,
+                mark_end: 0,
+            };
+
+            address += to_transfer;
+            offset_within_page = address & 0xFFF;
+            remaining_length -= to_transfer;
+
+            // If there's no more data to transfer, then quit
+            if remaining_length == 0 {
+                break;
+            } else {
+                index += 1;
+            }
+        }
+
+        // Mark last PRD as last entry in PRDT.
+        unsafe { (*prdt)[index].mark_end = ATA_PRD_MARK_END };
+
+        assert_eq!(
+            buffer.as_ptr().addr() + sector_count * ATA_SECTOR_SIZE as usize,
+            address
+        );
     }
 
     fn io_wait(&self) {
@@ -392,6 +409,27 @@ impl Ata {
         // Enable Bus Mastering for IDE Controller (Bus Mastering is DMA for PCI)
         pci_device.lock().enable_dma();
 
+        // Allocate page frame for DMA transfers
+        let prdt_page = {
+            let mut memory_manager = memory_manager().write();
+
+            let frame = memory_manager.allocate_frame().unwrap().address().as_u64();
+
+            unsafe {
+                memory_manager
+                    .map_identity_for_current_address_space(
+                        &Page::new(VirtualAddress::new(frame)),
+                        PageFlags::WRITABLE | PageFlags::DISABLE_CACHING,
+                    )
+                    .unwrap();
+            };
+
+            // Physical address needs to fit in 32 bits
+            assert!(frame <= u32::MAX as u64);
+
+            frame
+        };
+
         debug!("Disk online, info: {:#?}", parsed_identify_response);
 
         Some(AtaDrive {
@@ -399,6 +437,7 @@ impl Ata {
             drive,
             pci_device,
             size_in_sectors: parsed_identify_response.capacity,
+            prdt_page,
         })
     }
 }
