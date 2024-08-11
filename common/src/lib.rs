@@ -2,22 +2,47 @@
 
 use core::cmp::min;
 
+/// The `Read` trait provides methods for reading data from a source.
+///
+/// This trait is intended to be implemented by types that represent
+/// readable data sources, such as files, buffers, or streams.
 pub trait Read {
+    /// Reads as much data as possible at the time into the provided buffer and returns how much it read.
+    ///
+    /// # Errors
+    ///
+    /// Errors are implementation defined.
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize, ()>;
+
+    /// Reads exactly the number of bytes required to fill the provided buffer.
+    /// Returns an error if there's not enough data.
     fn read_exact(&mut self, buffer: &mut [u8]) -> Result<(), ()>;
 }
 
+/// The `Seek` trait provides a method for seeking to a specific position within a data source.
+///
+/// This trait is intended to be implemented by types that represent data sources with a known size
+/// or that support random access.
 pub trait Seek {
+    /// Returns the current position within the data source.
     fn position(&self) -> u64;
+
+    /// Seeks to the specified position within the data source.
+    ///
+    /// # Errors
+    ///
+    /// Seeking beyond the data source is considered an error.
     fn seek(&mut self, position: u64) -> Result<(), ()>;
 }
 
+/// A `Cursor` wraps an inner data source and provides it with `Read` and `Seek` implementations.
 pub struct Cursor<T> {
     inner: T,
     position: u64,
 }
 
 impl<T> Cursor<T> {
+    /// Creates a new `Cursor` wrapping the provided data source, with the initial position set to zero.
     pub fn new(inner: T) -> Self {
         Self { inner, position: 0 }
     }
