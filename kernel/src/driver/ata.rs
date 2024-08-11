@@ -288,8 +288,8 @@ impl AtaDrive {
             let to_transfer = min(remaining_length, PAGE_SIZE - offset_within_page);
 
             // Fill in PRD
-            let _prd = unsafe { &mut (*prdt)[index] as &mut PhysicalRegionDescriptor };
-            *(_prd) = PhysicalRegionDescriptor {
+            let prd = unsafe { &mut (*prdt)[index] as &mut PhysicalRegionDescriptor };
+            *prd = PhysicalRegionDescriptor {
                 buffer_physical_address: physical_address as u32,
                 transfer_size: to_transfer as u16,
                 mark_end: 0,
