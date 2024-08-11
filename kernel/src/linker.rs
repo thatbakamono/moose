@@ -1,6 +1,6 @@
 use core::cmp::min;
 
-use common::{Cursor, Read};
+use common::{Cursor, Read, Seek};
 use snafu::Snafu;
 
 use crate::memory::{MemoryManager, Page, PageFlags, PageTable, VirtualAddress, PAGE_SIZE};
@@ -73,7 +73,8 @@ impl Linker {
 
             let required_frames = (header.p_filesz + (PAGE_SIZE as u64 - 1)) as usize / PAGE_SIZE; // Rounds up to the next PAGE_SIZE
 
-            reader.seek(header.p_offset);
+            // FIXME: This shouldn't panic
+            reader.seek(header.p_offset).unwrap();
 
             let mut remaining_size = header.p_filesz as usize;
 
