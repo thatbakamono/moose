@@ -81,8 +81,6 @@ const ATA_CMD_PACKET: u8 = 0xA0;
 const ATA_CMD_IDENTIFY_PACKET: u8 = 0xA1;
 const ATA_CMD_IDENTIFY: u8 = 0xEC;
 
-const ATA_SECTOR_COUNT_IN_PAGE: usize = PAGE_SIZE / ATA_SECTOR_SIZE as usize;
-
 pub type Sector = [u8; ATA_SECTOR_SIZE as usize];
 
 #[derive(Clone, Copy, Debug, Default)]
