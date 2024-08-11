@@ -8,7 +8,7 @@ use libm::ceilf;
 use linked_list_allocator::Heap;
 use spin::{Mutex, Once};
 
-const HEAP_START: usize = 0x4444_4444_0000;
+pub(crate) const HEAP_START: usize = 0x4444_4444_0000;
 const INITIAL_HEAP_SIZE: usize = 16 * 1024 * 1024;
 
 #[global_allocator]

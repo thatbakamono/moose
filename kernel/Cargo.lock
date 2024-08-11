@@ -69,6 +69,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
+name = "common"
+version = "0.1.0"
+
+[[package]]
 name = "darling"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -168,6 +172,7 @@ dependencies = [
  "bitfield-struct",
  "bitflags",
  "bytemuck",
+ "common",
  "deku",
  "goblin",
  "libm",
@@ -176,7 +181,6 @@ dependencies = [
  "log",
  "pic8259",
  "raw-cpuid",
- "sandbox",
  "snafu",
  "spin",
  "volatile 0.5.4",
@@ -276,10 +280,6 @@ name = "rustversion"
 version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "955d28af4278de8121b7ebeb796b6a45735dc01436d898801014aced2773a3d6"
-
-[[package]]
-name = "sandbox"
-version = "0.1.0"
 
 [[package]]
 name = "scopeguard"
