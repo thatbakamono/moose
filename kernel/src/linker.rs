@@ -1,4 +1,4 @@
-use core::cmp::min;
+use core::{cmp::min, slice};
 
 use common::{Cursor, Read, Seek};
 use snafu::Snafu;
@@ -105,9 +105,11 @@ impl Linker {
                             |page| {
                                 let destination = page.address().as_mut_ptr::<u8>();
 
-                                for i in 0..bytes_read {
-                                    *destination.add(offset as usize + i) = buffer[i];
-                                }
+                                slice::from_raw_parts_mut(
+                                    destination.add(offset as usize),
+                                    bytes_read,
+                                )
+                                .copy_from_slice(&buffer[..bytes_read]);
                             },
                         )
                         .unwrap();

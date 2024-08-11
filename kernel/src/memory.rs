@@ -419,6 +419,17 @@ impl MemoryManager {
                     .as_mut_ptr();
 
                     for level_1_page_table_entry_index in 0..512 {
+                        // Ignore the very first page, as it'd have virtual address 0x0, which is undesirable for a lot of different reasons.
+                        // Firstly, some optimizations assume 0x0 is not a valid address (e.g. Option<&T> being represented as just &T with None being a null pointer).
+                        // Secondly, a lot of methods freak out when they get a 0x0 pointer, thinking it's a null pointer.
+                        if level_4_page_table_entry_index == 0
+                            && level_3_page_table_entry_index == 0
+                            && level_2_page_table_entry_index == 0
+                            && level_1_page_table_entry_index == 0
+                        {
+                            continue;
+                        }
+
                         let level_1_page_table_entry = &mut unsafe { &mut *level_1_page_table }
                             [level_1_page_table_entry_index];
 
