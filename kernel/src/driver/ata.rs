@@ -279,7 +279,7 @@ impl AtaDrive {
                 .as_u64();
 
             // PRD allows DMA only to 32-bit physical addresses
-            assert!(physical_address < u32::MAX as u64);
+            assert!(physical_address <= u32::MAX as u64);
 
             // Calculate bytes to transfer as minimum of (remaining bytes in this page) and
             // (remaining bytes of transfer)
@@ -423,6 +423,9 @@ impl Ata {
                     )
                     .unwrap();
             };
+
+            // Physical address needs to fit in 32 bits
+            assert!(frame <= u32::MAX as u64);
 
             frame
         };
