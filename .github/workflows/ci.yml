@@ -37,6 +37,11 @@ jobs:
         cd kernel
         cargo build --verbose
 
+    - name: Test common
+      run: |
+        cd common
+        cargo test
+
     - name: Test filesystem
       run: |
         cd fs
