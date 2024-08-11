@@ -26,10 +26,21 @@ jobs:
     - name: Install NASM
       uses: ilammy/setup-nasm@v1
 
+    - name: Build sandbox
+      run: |
+        cd sandbox
+        cargo build --release --verbose
+        cd ..
+
     - name: Build kernel
       run: |
         cd kernel
         cargo build --verbose
+
+    - name: Test common
+      run: |
+        cd common
+        cargo test
 
     - name: Test filesystem
       run: |

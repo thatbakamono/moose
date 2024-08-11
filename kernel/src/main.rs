@@ -16,6 +16,7 @@ mod cpu;
 mod driver;
 mod font;
 mod kernel;
+mod linker;
 mod logger;
 mod memory;
 mod serial;
@@ -31,6 +32,7 @@ use crate::memory::{
 use crate::terminal::Terminal;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
+use allocator::HEAP_START;
 use arch::x86::gdt::{
     GlobalDescriptorTableDescriptor, SegmentFlags, SystemSegmentDescriptor,
     SystemSegmentDescriptorAttributes, SystemSegmentType, GDT, GDT_DESCRIPTOR, TSS, TSS_INDEX,
@@ -47,6 +49,7 @@ use limine::request::{
     RsdpRequest, StackSizeRequest,
 };
 use limine::BaseRevision;
+use linker::Linker;
 use log::{error, info};
 use memory::{Frame, PAGE_SIZE};
 use raw_cpuid::CpuId;
@@ -245,42 +248,25 @@ unsafe extern "C" fn _start() -> ! {
 
     info!("Entering user mode!");
 
-    start_program(physical_memory_offset, stack_pointer, interrupt_stack);
+    static PROGRAM: &[u8] = include_bytes!("../../sandbox/target/x86_64-moose/release/sandbox");
+
+    start_program(
+        PROGRAM,
+        physical_memory_offset,
+        stack_pointer,
+        interrupt_stack,
+    );
 }
 
 pub fn start_program(
+    program: &[u8],
     physical_memory_offset: u64,
     kernel_stack: u64,
     interrupt_stack: *mut InterruptStack,
 ) -> ! {
     let mut memory_manager = memory_manager().write();
 
-    let program_frame = memory_manager.allocate_frame().unwrap();
-
     let stack = unsafe { alloc::alloc::alloc_zeroed(Layout::new::<ThreadStack>()) };
-
-    // temporarily map frame in kernel's address space, so we can write there
-    unsafe {
-        memory_manager
-            .map_any_temporary_for_current_address_space(
-                &program_frame,
-                PageFlags::WRITABLE,
-                |page| {
-                    // int 0x80
-                    *(page.address().as_mut_ptr::<u8>()) = 0xCD;
-                    *(page.address().as_mut_ptr::<u8>().offset(1)) = 0x80;
-
-                    // int 0x80
-                    *(page.address().as_mut_ptr::<u8>().offset(2)) = 0xCD;
-                    *(page.address().as_mut_ptr::<u8>().offset(3)) = 0x80;
-
-                    // jmp $
-                    *(page.address().as_mut_ptr::<u8>().offset(4)) = 0xEB;
-                    *(page.address().as_mut_ptr::<u8>().offset(5)) = 0xFE;
-                },
-            )
-            .unwrap()
-    };
 
     let program_page_table = Box::leak(Box::new(PageTable::new()));
 
@@ -309,18 +295,34 @@ pub fn start_program(
     {
         let kernel_page_table = unsafe { current_page_table(physical_memory_offset) };
 
-        let page_index = ((kernel_stack >> 39) & 0b1_1111_1111) as usize;
+        let level_4_page_table_entry_index = ((kernel_stack >> 39) & 0b1_1111_1111) as usize;
+        let level_4_page_table_entry =
+            &unsafe { &*kernel_page_table }[level_4_page_table_entry_index];
 
-        let level_4_page_table_entry = &unsafe { &*kernel_page_table }[page_index];
+        program_page_table[level_4_page_table_entry_index]
+            .set_address(level_4_page_table_entry.address());
+        program_page_table[level_4_page_table_entry_index]
+            .set_flags(level_4_page_table_entry.flags());
+    }
 
-        program_page_table[page_index].set_address(level_4_page_table_entry.address());
-        program_page_table[page_index].set_flags(level_4_page_table_entry.flags());
+    // map kernel's heap in program's address space
+    {
+        let kernel_page_table = unsafe { current_page_table(physical_memory_offset) };
+
+        let level_4_page_table_entry_index = (HEAP_START >> 39) & 0b1_1111_1111;
+        let level_4_page_table_entry =
+            &unsafe { &*kernel_page_table }[level_4_page_table_entry_index];
+
+        program_page_table[level_4_page_table_entry_index]
+            .set_address(level_4_page_table_entry.address());
+        program_page_table[level_4_page_table_entry_index]
+            .set_flags(level_4_page_table_entry.flags());
     }
 
     // remap interrupt's stack in program's address space
     for page_index in 0..(mem::size_of::<InterruptStack>() / PAGE_SIZE) as u64 {
         let interrupt_stack_virtual_address =
-            VirtualAddress::new(interrupt_stack as u64 + (page_index * 4096));
+            VirtualAddress::new(interrupt_stack as u64 + (page_index * PAGE_SIZE as u64));
         let interrupt_stack_physical_address = memory_manager
             .translate_virtual_address_to_physical_for_current_address_space(
                 interrupt_stack_virtual_address,
@@ -344,21 +346,13 @@ pub fn start_program(
         }
     }
 
-    // map program in program's address space
-    unsafe {
-        memory_manager
-            .map(
-                program_page_table,
-                &Page::new(VirtualAddress::new(0xDEA_DBEE_F000)),
-                &program_frame,
-                PageFlags::USER_MODE_ACCESSIBLE | PageFlags::EXECUTABLE,
-            )
-            .unwrap()
-    };
+    // FIXME: Handle linkage errors properly
+    let entry_point = Linker::link(program, &mut memory_manager, program_page_table).unwrap();
 
     // map program's stack in program's address space
     for page_index in 0..(mem::size_of::<ThreadStack>() / PAGE_SIZE) as u64 {
-        let stack_virtual_address = VirtualAddress::new(stack as u64 + (page_index * 4096));
+        let stack_virtual_address =
+            VirtualAddress::new(stack as u64 + (page_index * PAGE_SIZE as u64));
         let stack_physical_address = memory_manager
             .translate_virtual_address_to_physical_for_current_address_space(stack_virtual_address)
             .unwrap();
@@ -401,7 +395,7 @@ pub fn start_program(
     // > local variables in scope are not dropped before it is invoked.
     drop(memory_manager);
 
-    enter_user_mode(0xDEA_DBEE_F000 as *const _, unsafe {
+    enter_user_mode(entry_point as *const _, unsafe {
         stack.add(mem::size_of::<ThreadStack>()).offset(-16)
     });
 }
