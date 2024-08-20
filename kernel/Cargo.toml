@@ -21,6 +21,8 @@ bitfield-struct = "0.6.1"
 bytemuck = "1.16.0"
 goblin = { version = "0.8.2", default-features = false, features = ["alloc", "elf32", "elf64", "endian_fd"] }
 common = { version = "0.1.0", path = "../common" }
+acpica-rs = { git = "https://github.com/moose-os/acpica-rs" }
+phf = { version = "0.11", features = ["macros"], default-features = false }
 
 [profile.dev]
 opt-level = 1
