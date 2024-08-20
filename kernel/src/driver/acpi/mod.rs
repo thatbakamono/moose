@@ -1,24 +1,28 @@
-mod dsdt;
-mod fadt;
+pub mod acpica;
+mod devices;
+mod hid;
 mod madt;
 mod rsdp;
 mod sdt;
 
-pub use dsdt::*;
-pub use fadt::*;
+pub use acpica::*;
+use acpica_rs::{
+    set_os_services_implementation,
+    sys::{
+        AcpiEnableSubsystem, AcpiInitializeObjects, AcpiInitializeSubsystem, AcpiInitializeTables,
+        AcpiLoadTables, ACPI_FULL_INITIALIZATION,
+    },
+    AE_OK,
+};
+pub use devices::*;
 pub use madt::*;
 pub use rsdp::*;
 pub use sdt::*;
 
-use crate::{
-    arch::x86::asm::{inb, inl, inw, outb, outl, outw},
-    driver::pci::Pci,
-    memory::{
-        memory_manager, Frame, MemoryError, Page, PageFlags, PhysicalAddress, VirtualAddress,
-    },
+use crate::memory::{
+    memory_manager, Frame, MemoryError, Page, PageFlags, PhysicalAddress, VirtualAddress,
 };
 use alloc::{boxed::Box, sync::Arc};
-use aml::{AmlContext, DebugVerbosity, Handler};
 use core::{mem, ptr, slice};
 
 /// Root System Description Pointer Signature
@@ -73,9 +77,6 @@ const PAGE_NUMBER_MASK: u64 = 0xFFFF_FFFF_F000;
 pub struct Acpi {
     pub rsdp: Rsdp,
     pub madt: Arc<Madt>,
-    pub fadt: Arc<Fadt>,
-    pub dsdt: Arc<Dsdt>,
-    pub aml_context: AmlContext,
 }
 
 impl Acpi {
@@ -91,19 +92,26 @@ impl Acpi {
         {
             let mut memory_manager = memory_manager().write();
 
-            unsafe {
+            match unsafe {
                 memory_manager.map_for_current_address_space(
                     &Page::new(VirtualAddress::new(rsdt_address & 0xFFFF_FFFF_F000)),
                     &Frame::new(PhysicalAddress::new(rsdt_address & 0xFFFF_FFFF_F000)),
                     PageFlags::empty(),
                 )
-            }
-            .expect("Cannot map RSDT");
+            } {
+                // If page was unmapped, and we've just mapped it, it's ok
+                Ok(()) => {}
+                // If page was already mapped, it means that we have mapped it in previous loop
+                // iteration, and it's ok
+                Err(MemoryError::AlreadyMapped) => {}
+                // In case of any other error bail out
+                Err(err) => {
+                    panic!("Memory error: {}", err);
+                }
+            };
         }
 
         let mut madt = None;
-        let mut fadt = None;
-        let mut dsdt = None;
 
         let rsdt_header_slice = unsafe {
             slice::from_raw_parts(rsdt_address as *const u8, mem::size_of::<SdtHeader>())
@@ -149,62 +157,10 @@ impl Acpi {
                 )
             };
 
-            match entry_header.signature {
-                MADT_SIGNATURE => {
-                    madt = Some(Arc::new(Madt::try_from(slice).unwrap()));
-                }
-                FADT_SIGNATURE => {
-                    fadt = Some(Arc::new(Fadt::try_from(slice).unwrap()));
-                }
-                _ => {}
+            if entry_header.signature == MADT_SIGNATURE {
+                madt = Some(Arc::new(Madt::try_from(slice).unwrap()));
             }
         }
-
-        if let Some(fadt) = &fadt {
-            {
-                let mut memory_manager = memory_manager().write();
-
-                let page_number = fadt.dsdt as u64 & PAGE_NUMBER_MASK;
-
-                // Map table into memory
-                match unsafe {
-                    memory_manager.map_for_current_address_space(
-                        &Page::new(VirtualAddress::new(page_number)),
-                        &Frame::new(PhysicalAddress::new(page_number)),
-                        PageFlags::empty(),
-                    )
-                } {
-                    // If page was unmapped, and we've just mapped it, it's ok
-                    Ok(()) => {}
-                    // If page was already mapped, it means that we have mapped it in previous loop
-                    // iteration, and it's ok
-                    Err(MemoryError::AlreadyMapped) => {}
-                    // In case of any other error bail out
-                    Err(err) => {
-                        panic!("Memory error: {}", err);
-                    }
-                }
-            }
-
-            // We need to first parse every entry header, create slice and then parse it, because
-            // we need to create safe slice around this table and the only way we can get the slice
-            // length is by reading the entry header.
-            let entry_header = unsafe { &*(fadt.dsdt as usize as *const SdtHeader) };
-            let slice = unsafe {
-                slice::from_raw_parts(
-                    fadt.dsdt as usize as *const u8,
-                    entry_header.length as usize,
-                )
-            };
-
-            dsdt = Some(Arc::new(Dsdt::try_from(slice).unwrap()));
-        }
-
-        let dsdt = dsdt.expect("DSDT must be present.");
-
-        let mut aml_context = AmlContext::new(Box::new(AmlHandler), DebugVerbosity::None);
-
-        aml_context.parse_table(&dsdt.aml).unwrap();
 
         // Map memory mapped I/O frames of the first and the second HPET (high precision event timer)
         {
@@ -227,14 +183,9 @@ impl Acpi {
             }
         }
 
-        aml_context.initialize_objects().unwrap();
-
         Self {
             rsdp: unsafe { *rsdp },
             madt: madt.expect("MADT must be present."),
-            fadt: fadt.expect("FADT must be present."),
-            dsdt,
-            aml_context,
         }
     }
 
@@ -243,152 +194,37 @@ impl Acpi {
     }
 }
 
-struct AmlHandler;
+#[derive(Debug)]
+pub enum AcpicaError {
+    InitializeSubsystem,
+    InitializeTables,
+    LoadTables,
+    EnableSubsystem,
+    InitializeObjects,
+}
 
-impl Handler for AmlHandler {
-    fn read_u8(&self, address: usize) -> u8 {
-        unsafe { ptr::read_volatile(address as *const u8) }
+pub unsafe fn initialize_acpica() -> Result<(), AcpicaError> {
+    set_os_services_implementation(Box::new(MooseAcpicaOsImplementation {}));
+
+    if AcpiInitializeSubsystem() != AE_OK {
+        return Err(AcpicaError::InitializeSubsystem);
     }
 
-    fn read_u16(&self, address: usize) -> u16 {
-        unsafe { ptr::read_volatile(address as *const u16) }
+    if AcpiInitializeTables(ptr::null_mut(), 16, true as u8) != AE_OK {
+        return Err(AcpicaError::InitializeTables);
     }
 
-    fn read_u32(&self, address: usize) -> u32 {
-        unsafe { ptr::read_volatile(address as *const u32) }
+    if AcpiLoadTables() != AE_OK {
+        return Err(AcpicaError::LoadTables);
     }
 
-    fn read_u64(&self, address: usize) -> u64 {
-        unsafe { ptr::read_volatile(address as *const u64) }
+    if AcpiEnableSubsystem(ACPI_FULL_INITIALIZATION) != AE_OK {
+        return Err(AcpicaError::EnableSubsystem);
     }
 
-    fn write_u8(&mut self, address: usize, value: u8) {
-        unsafe { ptr::write_volatile(address as *mut u8, value) }
+    if AcpiInitializeObjects(ACPI_FULL_INITIALIZATION) != AE_OK {
+        return Err(AcpicaError::InitializeObjects);
     }
 
-    fn write_u16(&mut self, address: usize, value: u16) {
-        unsafe { ptr::write_volatile(address as *mut u16, value) }
-    }
-
-    fn write_u32(&mut self, address: usize, value: u32) {
-        unsafe { ptr::write_volatile(address as *mut u32, value) }
-    }
-
-    fn write_u64(&mut self, address: usize, value: u64) {
-        unsafe { ptr::write_volatile(address as *mut u64, value) }
-    }
-
-    fn read_io_u8(&self, port: u16) -> u8 {
-        inb(port)
-    }
-
-    fn read_io_u16(&self, port: u16) -> u16 {
-        inw(port)
-    }
-
-    fn read_io_u32(&self, port: u16) -> u32 {
-        inl(port)
-    }
-
-    fn write_io_u8(&self, port: u16, value: u8) {
-        outb(port, value)
-    }
-
-    fn write_io_u16(&self, port: u16, value: u16) {
-        outw(port, value)
-    }
-
-    fn write_io_u32(&self, port: u16, value: u32) {
-        outl(port, value)
-    }
-
-    fn read_pci_u8(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16) -> u8 {
-        if segment != 0 {
-            todo!();
-        }
-
-        Pci::read_u8(bus as u32, device as u32, function as u32, offset as u32)
-    }
-
-    fn read_pci_u16(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16) -> u16 {
-        if segment != 0 {
-            todo!();
-        }
-
-        Pci::read_u16(bus as u32, device as u32, function as u32, offset as u32)
-    }
-
-    fn read_pci_u32(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16) -> u32 {
-        if segment != 0 {
-            todo!();
-        }
-
-        Pci::read_u32(bus as u32, device as u32, function as u32, offset as u32)
-    }
-
-    fn write_pci_u8(
-        &self,
-        segment: u16,
-        bus: u8,
-        device: u8,
-        function: u8,
-        offset: u16,
-        value: u8,
-    ) {
-        if segment != 0 {
-            todo!();
-        }
-
-        Pci::write_u8(
-            bus as u32,
-            device as u32,
-            function as u32,
-            offset as u32,
-            value,
-        );
-    }
-
-    fn write_pci_u16(
-        &self,
-        segment: u16,
-        bus: u8,
-        device: u8,
-        function: u8,
-        offset: u16,
-        value: u16,
-    ) {
-        if segment != 0 {
-            todo!();
-        }
-
-        Pci::write_u16(
-            bus as u32,
-            device as u32,
-            function as u32,
-            offset as u32,
-            value,
-        );
-    }
-
-    fn write_pci_u32(
-        &self,
-        segment: u16,
-        bus: u8,
-        device: u8,
-        function: u8,
-        offset: u16,
-        value: u32,
-    ) {
-        if segment != 0 {
-            todo!();
-        }
-
-        Pci::write_u32(
-            bus as u32,
-            device as u32,
-            function as u32,
-            offset as u32,
-            value,
-        );
-    }
+    Ok(())
 }
