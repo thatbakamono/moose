@@ -1,17 +1,16 @@
-use core::alloc::{GlobalAlloc, Layout};
+use core::alloc::{Allocator, Layout};
 use core::ffi::c_void;
+use core::ptr::{self, NonNull};
 
-use acpica_rs::sys::*;
 use acpica_rs::{
-    AcpicaOsServices, ACPI_CPU_FLAGS, ACPI_MUTEX, ACPI_SEMAPHORE, ACPI_SPINLOCK, ACPI_THREAD_ID,
-    AE_BAD_PARAMETER, AE_OK,
+    sys::*, AcpicaOsServices, ACPI_CPU_FLAGS, ACPI_MUTEX, ACPI_SEMAPHORE, ACPI_SPINLOCK,
+    ACPI_THREAD_ID, AE_BAD_PARAMETER, AE_OK,
 };
 
-use alloc::string::ToString;
+use alloc::alloc::Global;
 use libm::ceil;
 
 use crate::{
-    allocator::ALLOCATOR,
     arch::x86::asm::{inb, inl, inw, outb, outl, outw},
     driver::pci::Pci,
     memory::{memory_manager, MemoryError, Page, PageFlags, VirtualAddress, PAGE_SIZE},
@@ -24,6 +23,7 @@ struct SizePrefixedAllocation {
 
 pub struct MooseAcpicaOsImplementation {}
 
+// All unimplemented functions were not implemented, because ACPICA never call them in our use case.
 impl AcpicaOsServices for MooseAcpicaOsImplementation {
     fn initialize(&self) -> ACPI_STATUS {
         // Don't need to do any initialization work here
@@ -40,16 +40,15 @@ impl AcpicaOsServices for MooseAcpicaOsImplementation {
         let offset = address & 0xFFF;
         let pages_to_map = ceil((offset as f64 + length as f64) / PAGE_SIZE as f64) as usize;
 
+        let mut memory_manager = memory_manager().write();
         for i in 0..pages_to_map {
             match unsafe {
-                memory_manager()
-                    .write()
-                    .map_identity_for_current_address_space(
-                        &Page::new(VirtualAddress::new(
-                            ((address & 0xFFFF_FFFF_FFFF_F000) + i * PAGE_SIZE) as u64,
-                        )),
-                        PageFlags::WRITABLE,
-                    )
+                memory_manager.map_identity_for_current_address_space(
+                    &Page::new(VirtualAddress::new(
+                        ((address & 0xFFFF_FFFF_FFFF_F000) + i * PAGE_SIZE) as u64,
+                    )),
+                    PageFlags::WRITABLE,
+                )
             } {
                 // If page was unmapped, and we've just mapped it, it's ok
                 Ok(()) => {}
@@ -84,9 +83,12 @@ impl AcpicaOsServices for MooseAcpicaOsImplementation {
     fn allocate(&self, size: ACPI_SIZE) -> *mut c_void {
         unsafe {
             let allocation_size = size as usize + size_of::<usize>();
-            let allocation = ALLOCATOR.alloc(Layout::from_size_align(allocation_size, 2).unwrap());
+            let allocation = Global
+                .allocate(Layout::from_size_align(allocation_size, 2).unwrap())
+                .unwrap()
+                .as_ptr() as *mut u8;
 
-            // We can't free a memory without knowing it's size, so store it as a metadata
+            // We can't free memory without knowing it's size, so store it as a metadata
             // just before start of the allocated memory region we return to the ACPICA.
             *(allocation as *mut usize) = allocation_size;
 
@@ -97,12 +99,13 @@ impl AcpicaOsServices for MooseAcpicaOsImplementation {
     fn free(&self, address: *mut c_void) {
         unsafe {
             let address = address as *mut u8;
+            assert_ne!(address, ptr::null_mut());
 
             let allocation_start = address.sub(size_of::<usize>());
             let allocation_size = *(allocation_start as *mut usize);
 
-            ALLOCATOR.dealloc(
-                allocation_start,
+            Global.deallocate(
+                NonNull::new_unchecked(allocation_start),
                 Layout::from_size_align(allocation_size, 2).unwrap(),
             )
         }
@@ -361,11 +364,13 @@ impl AcpicaOsServices for MooseAcpicaOsImplementation {
     }
 
     fn initialize_debugger(&self) {
-        todo!()
+        // Dont plan to support this
+        unimplemented!()
     }
 
     fn terminate_debugger(&self) {
-        todo!()
+        // Dont plan to support this
+        unimplemented!()
     }
 
     fn wait_command_ready(&self) {
@@ -381,24 +386,16 @@ impl AcpicaOsServices for MooseAcpicaOsImplementation {
     }
 
     fn disassemble(&self, _walk_state: u64, _origin: u64, _num_opcodes: u32) {
-        todo!()
+        // Dont plan to support this
+        unimplemented!()
     }
 
     fn parse_deferred_operations(&self, _root: u64) {
-        todo!()
+        // Dont plan to support this
+        unimplemented!()
     }
 
-    fn print(&self, text: core::fmt::Arguments) {
-        let mut stripped = text.to_string();
-        stripped.remove_matches(char::is_whitespace);
-
-        if stripped.is_empty() {
-            return;
-        }
-
-        let text = text.to_string();
-        let _text = text.replace("\n", "");
-
-        //debug!("{}", text);
+    fn print(&self, _text: core::fmt::Arguments) {
+        // Intentionally left blank
     }
 }

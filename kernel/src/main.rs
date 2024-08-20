@@ -30,12 +30,6 @@ use crate::memory::{
     VirtualAddress,
 };
 use crate::terminal::Terminal;
-use acpica_rs::sys::ACPI_FULL_INITIALIZATION;
-use acpica_rs::sys::{
-    AcpiEnableSubsystem, AcpiInitializeObjects, AcpiInitializeSubsystem, AcpiInitializeTables,
-    AcpiLoadTables,
-};
-use acpica_rs::{set_os_services_implementation, AE_OK};
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use allocator::HEAP_START;
@@ -48,7 +42,7 @@ use core::alloc::Layout;
 use core::arch::asm;
 use core::ptr::addr_of;
 use core::{mem, ptr};
-use driver::acpi::{initialize_acpica, MooseAcpicaOsImplementation};
+use driver::acpi::{create_device_list, initialize_acpica};
 use driver::net::nic::rtl8139::Rtl8139;
 use limine::paging::Mode;
 use limine::request::{
@@ -202,7 +196,7 @@ unsafe extern "C" fn _start() -> ! {
 
     initialize_acpica().unwrap();
 
-    let devices = driver::acpi::create_device_list();
+    let devices = create_device_list();
 
     for device in &devices {
         debug!("Device :{:#?}", device);

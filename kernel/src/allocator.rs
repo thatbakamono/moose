@@ -12,7 +12,7 @@ pub(crate) const HEAP_START: usize = 0x4444_4444_0000;
 const INITIAL_HEAP_SIZE: usize = 16 * 1024 * 1024;
 
 #[global_allocator]
-pub static mut ALLOCATOR: KernelHeapAllocator = KernelHeapAllocator::empty();
+static mut ALLOCATOR: KernelHeapAllocator = KernelHeapAllocator::empty();
 
 pub fn initialize_heap() -> Result<(), MemoryError> {
     let mut memory_manager = memory_manager().write();
@@ -33,7 +33,7 @@ pub fn initialize_heap() -> Result<(), MemoryError> {
     Ok(())
 }
 
-pub struct KernelHeapAllocator {
+struct KernelHeapAllocator {
     inner: Once<Mutex<KernelHeapAllocatorInner>>,
 }
 
