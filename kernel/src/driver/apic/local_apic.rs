@@ -3,7 +3,7 @@ use crate::arch::x86::idt::IDT;
 use crate::arch::x86::use_kernel_page_table;
 use crate::cpu::ProcessorControlBlock;
 use crate::driver::pit::PIT;
-use crate::kernel::Kernel;
+use crate::kernel::{kernel_ref, Kernel};
 use crate::memory::{memory_manager, MemoryError, Page, PageFlags, VirtualAddress};
 use crate::process::Registers;
 use crate::scheduler;
@@ -11,6 +11,7 @@ use crate::InterruptStack;
 use alloc::sync::Arc;
 use core::alloc::Layout;
 use core::arch::asm;
+use core::sync::atomic::Ordering;
 use core::{
     mem::{self, offset_of},
     ptr::{self, addr_of},
@@ -336,6 +337,10 @@ pub(crate) extern "C" fn raw_timer_interrupt_handler() -> ! {
 
 #[no_mangle]
 extern "C" fn timer_interrupt_handler(registers: *mut Registers) {
+    let kernel = kernel_ref();
+
+    kernel.ticks.fetch_add(1, Ordering::SeqCst);
+
     scheduler::run(registers);
 
     use_kernel_page_table(|| unsafe {
