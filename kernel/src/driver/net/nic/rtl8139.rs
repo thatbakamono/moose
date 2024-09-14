@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, sync::Arc};
+use alloc::{boxed::Box, sync::Arc, vec};
 use core::slice;
 use log::debug;
 use raw_cpuid::{CpuId, Hypervisor};
@@ -31,8 +31,8 @@ const INTERRUPT_MASK_REGISTER: u16 = 0x3C;
 const INTERRUPT_STATUS_REGISTER: u16 = 0x3E;
 const RECEIVE_CONFIGURATION_REGISTER: u16 = 0x44;
 const CONFIG_1_REGISTER: u16 = 0x52;
-const RX_BUFFER_SIZE: usize = (1 << 13) + 1500 + 4 + 4;
-const RX_RING_BUFFER_SIZE: usize = 8192;
+const RX_BUFFER_SIZE: usize = 65536 + 1500 + 4 + 4;
+const RX_RING_BUFFER_SIZE: usize = 65536;
 
 pub struct Rtl8139 {
     inner: Arc<Mutex<Rtl8139Inner>>,
@@ -42,18 +42,19 @@ impl Rtl8139 {
     pub fn new(pci_device: Arc<Mutex<PciDevice>>, kernel: Arc<RwLock<Kernel>>) -> Rtl8139 {
         let mut memory_manager = memory_manager().write();
 
-        // We use 8kb ring buffer for RX buffer and want to map first page after the last one,
+        // We use 64kb ring buffer for RX buffer and want to map first page after the last one,
         // so we'll be able to read buffer without complex logic related to wrapping ring buffer.
         //
-        // 8kb occupies 2 physical pages.
-        // We allocate them manually as we need to explicilty have 2 **physically contiguous** pages.
-        let frames = [
-            memory_manager.allocate_frame().unwrap(),
-            memory_manager.allocate_frame().unwrap(),
-        ];
+        // 64kb occupies 16 physical pages.
+        // We allocate them manually as we need to explicilty have 16 **physically contiguous** pages.
+        let mut frames = vec![];
+
+        for _ in 0..16 {
+            frames.push(memory_manager.allocate_frame().unwrap());
+        }
 
         // Identity map frame buffer pages
-        for frame in frames {
+        for frame in &frames {
             unsafe {
                 memory_manager
                     .map_identity_for_current_address_space(
@@ -69,7 +70,7 @@ impl Rtl8139 {
             memory_manager
                 .map_for_current_address_space(
                     &Page::new(VirtualAddress::new(
-                        frames[1].address().as_u64() + PAGE_SIZE as u64,
+                        frames[15].address().as_u64() + PAGE_SIZE as u64,
                     )),
                     &Frame::new(PhysicalAddress::new(frames[0].address().as_u64())),
                     PageFlags::WRITABLE,
@@ -192,6 +193,7 @@ impl Rtl8139 {
                 rtl8139.io_base + RECEIVE_CONFIGURATION_REGISTER,
                 // WRAP bit would be the best setting, but for some reason
                 // QEMU does not support it
+                (0b11 << 11) | // 64kb
                 (1 << 3) | // Accept Broadcast Packets
                 (1 << 2) | // Accept Multicast Packets
                 (1 << 1) | // Accept Physical Match Packets
