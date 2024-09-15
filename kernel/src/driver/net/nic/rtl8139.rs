@@ -67,7 +67,7 @@ impl Rtl8139 {
             }
         }
 
-        // Map start of the buffer right after the start
+        // Map start of the buffer right after the end
         unsafe {
             memory_manager
                 .map_for_current_address_space(
