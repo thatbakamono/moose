@@ -22,8 +22,8 @@ use crate::{
     memory::{memory_manager, Frame, Page, PageFlags, PhysicalAddress, VirtualAddress, PAGE_SIZE},
 };
 
-const RST_BIT: u8 = 0x10;
 const BUFE_BIT: u8 = 0x1;
+const RST_BIT: u8 = 0x10;
 const RBSTART_REGISTER: u16 = 0x30;
 const COMMAND_REGISTER: u16 = 0x37;
 const CAPR: u16 = 0x38;
@@ -31,8 +31,10 @@ const INTERRUPT_MASK_REGISTER: u16 = 0x3C;
 const INTERRUPT_STATUS_REGISTER: u16 = 0x3E;
 const RECEIVE_CONFIGURATION_REGISTER: u16 = 0x44;
 const CONFIG_1_REGISTER: u16 = 0x52;
-const RX_BUFFER_SIZE: usize = 65536 + 1500 + 4 + 4;
+
+// Possible values: 8192, 16384, 32768, 65536
 const RX_RING_BUFFER_SIZE: usize = 65536;
+const RX_BUFFER_SIZE: usize = RX_RING_BUFFER_SIZE + 1518 + 4 + 4;
 
 pub struct Rtl8139 {
     inner: Arc<Mutex<Rtl8139Inner>>,
@@ -49,7 +51,7 @@ impl Rtl8139 {
         // We allocate them manually as we need to explicilty have 16 **physically contiguous** pages.
         let mut frames = vec![];
 
-        for _ in 0..16 {
+        for _ in 0..(RX_RING_BUFFER_SIZE / PAGE_SIZE) {
             frames.push(memory_manager.allocate_frame().unwrap());
         }
 
@@ -70,7 +72,7 @@ impl Rtl8139 {
             memory_manager
                 .map_for_current_address_space(
                     &Page::new(VirtualAddress::new(
-                        frames[15].address().as_u64() + PAGE_SIZE as u64,
+                        frames.last().unwrap().address().as_u64() + PAGE_SIZE as u64,
                     )),
                     &Frame::new(PhysicalAddress::new(frames[0].address().as_u64())),
                     PageFlags::WRITABLE,
@@ -98,6 +100,11 @@ impl Rtl8139 {
             CpuId::new().get_hypervisor_info().unwrap().identify(),
             Hypervisor::QEMU,
             "RTL8139 interrupts are only supported on QEMU currently, due to very unpleasant way of handling interrupts without MSI/MSI-X on PCI devices."
+        );
+
+        assert!(
+            [8192, 16384, 32768, 65536].contains(&RX_RING_BUFFER_SIZE),
+            "Ring buffer size must be 8kb, 16kb, 32kb or 64kb"
         );
 
         without_interrupts(|| {
@@ -188,12 +195,20 @@ impl Rtl8139 {
                 (1 << 2) | 1 | (1 << 4),
             );
 
+            let rx_buffer_size_bits = match RX_RING_BUFFER_SIZE {
+                8192 => 0b00,
+                16384 => 0b01,
+                32768 => 0b10,
+                65536 => 0b11,
+                _ => unreachable!(),
+            };
+
             // Initialize receiver options
             outl(
                 rtl8139.io_base + RECEIVE_CONFIGURATION_REGISTER,
                 // WRAP bit would be the best setting, but for some reason
                 // QEMU does not support it
-                (0b11 << 11) | // 64kb
+                (rx_buffer_size_bits << 11) |
                 (1 << 3) | // Accept Broadcast Packets
                 (1 << 2) | // Accept Multicast Packets
                 (1 << 1) | // Accept Physical Match Packets
@@ -309,13 +324,17 @@ impl Rtl8139Inner {
 
             self.current_rx_offset = (self.current_rx_offset + length as usize + 4 + 3) & !3;
 
-            // It's ring buffer, so if we overflow, just go back to the start.
+            // It's ring buffer, so if we overflow, just go back to the start. We're parsing frames
+            // one by one, so there's no possibility it would overflow two or more times.
             if self.current_rx_offset > RX_RING_BUFFER_SIZE {
                 self.current_rx_offset -= RX_RING_BUFFER_SIZE;
             }
 
             // Notify network card about new RX buffer reading offset
-            outw(self.io_base + CAPR, self.current_rx_offset as u16 - 0x10);
+            outw(
+                self.io_base + CAPR,
+                (self.current_rx_offset as u16).overflowing_sub(0x10).0,
+            );
         }
     }
 }
