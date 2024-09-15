@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, sync::Arc};
+use alloc::{boxed::Box, sync::Arc, vec};
 use core::slice;
 use log::debug;
 use raw_cpuid::{CpuId, Hypervisor};
@@ -19,9 +19,10 @@ use crate::{
         pci::PciDevice,
     },
     kernel::Kernel,
-    memory::{memory_manager, Page, PageFlags, VirtualAddress},
+    memory::{memory_manager, Frame, Page, PageFlags, PhysicalAddress, VirtualAddress, PAGE_SIZE},
 };
 
+const BUFE_BIT: u8 = 0x1;
 const RST_BIT: u8 = 0x10;
 const RBSTART_REGISTER: u16 = 0x30;
 const COMMAND_REGISTER: u16 = 0x37;
@@ -30,8 +31,10 @@ const INTERRUPT_MASK_REGISTER: u16 = 0x3C;
 const INTERRUPT_STATUS_REGISTER: u16 = 0x3E;
 const RECEIVE_CONFIGURATION_REGISTER: u16 = 0x44;
 const CONFIG_1_REGISTER: u16 = 0x52;
-const RX_BUFFER_SIZE: usize = (1 << 13) + 1500 + 4 + 4;
-const RX_RING_BUFFER_SIZE: usize = 8192;
+
+// Possible values: 8192, 16384, 32768, 65536
+const RX_RING_BUFFER_SIZE: usize = 65536;
+const RX_BUFFER_SIZE: usize = RX_RING_BUFFER_SIZE + 1518 + 4 + 4;
 
 pub struct Rtl8139 {
     inner: Arc<Mutex<Rtl8139Inner>>,
@@ -41,18 +44,19 @@ impl Rtl8139 {
     pub fn new(pci_device: Arc<Mutex<PciDevice>>, kernel: Arc<RwLock<Kernel>>) -> Rtl8139 {
         let mut memory_manager = memory_manager().write();
 
-        // We use 8kb ring buffer for RX buffer, but we're also utilizing WRAP feature of the network card
-        // so need to make some space for overlapping data
+        // We use 64kb ring buffer for RX buffer and want to map first page after the last one,
+        // so we'll be able to read buffer without complex logic related to wrapping ring buffer.
         //
-        // 8kb + 1518 bytes (worst case scenario) occupies 3 physical pages.
-        // We allocate them manually as we need to explicilty have 3 **physically contiguous** pages.
-        let frames = [
-            memory_manager.allocate_frame().unwrap(),
-            memory_manager.allocate_frame().unwrap(),
-            memory_manager.allocate_frame().unwrap(),
-        ];
+        // 64kb occupies 16 physical pages.
+        // We allocate them manually as we need to explicilty have 16 **physically contiguous** pages.
+        let mut frames = vec![];
 
-        for frame in frames {
+        for _ in 0..(RX_RING_BUFFER_SIZE / PAGE_SIZE) {
+            frames.push(memory_manager.allocate_frame().unwrap());
+        }
+
+        // Identity map frame buffer pages
+        for frame in &frames {
             unsafe {
                 memory_manager
                     .map_identity_for_current_address_space(
@@ -61,6 +65,19 @@ impl Rtl8139 {
                     )
                     .unwrap();
             }
+        }
+
+        // Map start of the buffer right after the end
+        unsafe {
+            memory_manager
+                .map_for_current_address_space(
+                    &Page::new(VirtualAddress::new(
+                        frames.last().unwrap().address().as_u64() + PAGE_SIZE as u64,
+                    )),
+                    &Frame::new(PhysicalAddress::new(frames[0].address().as_u64())),
+                    PageFlags::WRITABLE,
+                )
+                .unwrap();
         }
 
         let bar0 = pci_device.lock().get_bar(0);
@@ -83,6 +100,11 @@ impl Rtl8139 {
             CpuId::new().get_hypervisor_info().unwrap().identify(),
             Hypervisor::QEMU,
             "RTL8139 interrupts are only supported on QEMU currently, due to very unpleasant way of handling interrupts without MSI/MSI-X on PCI devices."
+        );
+
+        assert!(
+            [8192, 16384, 32768, 65536].contains(&RX_RING_BUFFER_SIZE),
+            "Ring buffer size must be 8kb, 16kb, 32kb or 64kb"
         );
 
         without_interrupts(|| {
@@ -173,10 +195,20 @@ impl Rtl8139 {
                 (1 << 2) | 1 | (1 << 4),
             );
 
+            let rx_buffer_size_bits = match RX_RING_BUFFER_SIZE {
+                8192 => 0b00,
+                16384 => 0b01,
+                32768 => 0b10,
+                65536 => 0b11,
+                _ => unreachable!(),
+            };
+
             // Initialize receiver options
             outl(
                 rtl8139.io_base + RECEIVE_CONFIGURATION_REGISTER,
-                (1 << 7) | // WRAP bit
+                // WRAP bit would be the best setting, but for some reason
+                // QEMU does not support it
+                (rx_buffer_size_bits << 11) |
                 (1 << 3) | // Accept Broadcast Packets
                 (1 << 2) | // Accept Multicast Packets
                 (1 << 1) | // Accept Physical Match Packets
@@ -256,41 +288,54 @@ struct Rtl8139Inner {
 
 impl Rtl8139Inner {
     fn handle_received_packet(&mut self) {
-        // Received data from the wire are preceded by two u16's:
-        //   - data status
-        //   - data length
+        // NIC can copy a lot of frames during one DMA transfer, and instead of doing
+        // one interrupt-one frame thing, we can process multiple frames during one interrupt
+        loop {
+            // Received data from the wire are preceded by two u16's:
+            //   - data status
+            //   - data length
 
-        let data_start = unsafe { self.rx_buffer.add(self.current_rx_offset) };
-        let status = unsafe { (data_start.add(0) as *const u16).read_volatile() };
-        let length = unsafe { (data_start.add(2) as *const u16).read_volatile() };
+            let data_start = unsafe { self.rx_buffer.add(self.current_rx_offset) };
+            let status = unsafe { (data_start.add(0) as *const u16).read_volatile() };
+            let length = unsafe { (data_start.add(2) as *const u16).read_volatile() };
 
-        debug!(
-            "Received data with length {}, status={}, offset={}",
-            length, status, self.current_rx_offset
-        );
+            // If the NIC marked packet as invalid OR rx buffer is empty (because we've processed
+            // all packets), then quit
+            if ((status & (1 << 0)) != 1)
+                || ((inb(self.io_base + COMMAND_REGISTER) & BUFE_BIT) != 0)
+            {
+                break;
+            }
 
-        // 4 is the data status and data length
-        // 1518 is maximum Ethernet frame length
-        // 4 is CRC32 checksum appended at the end of the data
-        let mut buffer = [0u8; 4 + 1518 + 4];
+            debug!(
+                "Received data with length {}, status={}, offset={}",
+                length, status, self.current_rx_offset
+            );
 
-        buffer[..length as usize]
-            .copy_from_slice(unsafe { slice::from_raw_parts(data_start, length as usize) });
+            // 4 is the data status and data length
+            // 1518 is maximum Ethernet frame length
+            // 4 is CRC32 checksum appended at the end of the data
+            let mut buffer = [0u8; 4 + 1518 + 4];
 
-        // @TODO: Pass buffer to the higher layers
+            buffer[..length as usize]
+                .copy_from_slice(unsafe { slice::from_raw_parts(data_start, length as usize) });
 
-        self.current_rx_offset = (self.current_rx_offset + length as usize + 4 + 3) & !3;
+            // @TODO: Pass buffer to the higher layers
 
-        // It's ring buffer, so if we overflow, just go back to the start.
-        if self.current_rx_offset > RX_RING_BUFFER_SIZE {
-            self.current_rx_offset -= RX_RING_BUFFER_SIZE;
+            self.current_rx_offset = (self.current_rx_offset + length as usize + 4 + 3) & !3;
+
+            // It's ring buffer, so if we overflow, just go back to the start. We're parsing frames
+            // one by one, so there's no possibility it would overflow two or more times.
+            if self.current_rx_offset > RX_RING_BUFFER_SIZE {
+                self.current_rx_offset -= RX_RING_BUFFER_SIZE;
+            }
+
+            // Notify network card about new RX buffer reading offset
+            outw(
+                self.io_base + CAPR,
+                (self.current_rx_offset as u16).overflowing_sub(0x10).0,
+            );
         }
-
-        // Notify network card about new RX buffer reading offset
-        outw(
-            self.io_base + CAPR,
-            (self.current_rx_offset as u16).overflowing_sub(0x10).0,
-        );
     }
 }
 
