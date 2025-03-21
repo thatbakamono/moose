@@ -1,8 +1,6 @@
 #![allow(dead_code)]
 #![feature(abi_x86_interrupt)]
 #![feature(allocator_api)]
-#![feature(strict_provenance)]
-#![feature(const_size_of_val)]
 #![feature(naked_functions)]
 #![feature(string_remove_matches)]
 #![no_std]
