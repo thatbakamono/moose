@@ -26,8 +26,9 @@
 //! guest should discard any partially written data.
 
 use alloc::string::String;
-use bitflags::bitflags;
 use core::slice;
+
+use bitflags::bitflags;
 
 use crate::driver::hv::hyperv::{
     VmBusOfferChannel, VmBusPacketType,

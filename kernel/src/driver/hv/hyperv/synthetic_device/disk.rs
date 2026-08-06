@@ -49,13 +49,13 @@
 //! - Linux kernel: `drivers/scsi/storvsc_drv.c`
 //! - Hyper-V TLFS (Top-Level Functional Specification)
 
+use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use core::{
     mem::size_of,
     ptr,
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use spin::RwLock;
 use x86_64::instructions::interrupts::without_interrupts;
 

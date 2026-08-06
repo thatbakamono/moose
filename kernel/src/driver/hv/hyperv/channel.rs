@@ -70,12 +70,11 @@
 //! - **GPADLs** are mappings for efficient large data transfer.
 //! - **Channels** serve as lightweight transport for control messages and events.
 //!
+use alloc::slice;
 use core::{
     arch::x86_64::_mm_mfence,
     ptr::{self},
 };
-
-use alloc::slice;
 
 use crate::{
     driver::hv::hyperv::{

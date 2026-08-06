@@ -86,13 +86,13 @@
 //!     |---------------------------------------->|
 //! ```
 //!
+use alloc::{sync::Arc, vec::Vec};
 use core::{
     ptr,
     range::Range,
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use alloc::{sync::Arc, vec::Vec};
 use spin::RwLock;
 
 use crate::{

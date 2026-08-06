@@ -39,9 +39,9 @@
 //! | 1   | Right button (PPM) |
 //! | 2   | Wheel button       |
 //!
+use alloc::vec;
 use core::ptr;
 
-use alloc::vec;
 use log::debug;
 
 use crate::driver::hv::hyperv::{

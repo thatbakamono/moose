@@ -12,6 +12,7 @@ use core::{
     ptr, slice,
     sync::atomic::{AtomicU32, AtomicU64, Ordering},
 };
+
 use spin::RwLock;
 use x86_64::instructions::interrupts::without_interrupts;
 

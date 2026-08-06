@@ -179,6 +179,12 @@
 //! # VMBus initialization sequence flow
 //!
 //! ```text
+use alloc::{
+    alloc::{alloc, dealloc},
+    boxed::Box,
+    sync::Arc,
+    vec::Vec,
+};
 /// ┌───────────────────────────────────────────┐
 /// │ Guest VM Boot                             │
 /// └───────────────────────────────────────────┘
@@ -233,12 +239,6 @@ use core::{
     sync::atomic::{AtomicU32, AtomicU64, Ordering},
 };
 
-use alloc::{
-    alloc::{alloc, dealloc},
-    boxed::Box,
-    sync::Arc,
-    vec::Vec,
-};
 use bitfield_struct::bitfield;
 use hashbrown::HashMap;
 use log::debug;

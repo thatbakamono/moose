@@ -1,4 +1,5 @@
 use alloc::fmt;
+
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, network_endian::U16};
 
 pub mod nic;

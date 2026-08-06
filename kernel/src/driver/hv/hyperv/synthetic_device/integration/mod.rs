@@ -54,9 +54,8 @@
 //! [`IcVersionSet`] and echoes the packet back in-place with counts set to 1.
 //! [`negotiate_versions`] implements this logic and can be reused by any service.
 
-use core::{char::decode_utf16, ptr, slice};
-
 use alloc::string::String;
+use core::{char::decode_utf16, ptr, slice};
 
 pub mod file_copy;
 pub mod heartbeat;

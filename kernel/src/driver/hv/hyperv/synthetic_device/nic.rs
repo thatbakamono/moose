@@ -112,13 +112,13 @@
 //!
 //! We do not support it yet.
 //!
+use alloc::{boxed::Box, slice, sync::Arc};
 use core::{
     ptr::{copy, null_mut},
     range::Range,
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use alloc::{boxed::Box, slice, sync::Arc};
 use hashbrown::HashMap;
 use spin::{mutex::Mutex, rwlock::RwLock};
 use x86_64::instructions::interrupts::without_interrupts;
